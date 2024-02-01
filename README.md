@@ -1,0 +1,1 @@
+Q-SYS Plugin to control Prusa 3D Printers from within Q-SYS. Primarily created to better learn Q-SYS plugin programming and design and to try some EZSVG graphing for hotend and bed temperature. Only sort of works at the moment due to additional programming needs and some changes to the Prusa Link API since I initially started work on this.
