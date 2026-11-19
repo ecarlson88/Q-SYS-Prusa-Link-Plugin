@@ -1112,6 +1112,7 @@ if Controls then
 
     Controls["Files"].EventHandler = function(ctl)
         PL.State.selected = ctl.String ~= "" and ctl.String or nil
+        if PL.disarmDelete then PL.disarmDelete() end
     end
 
     Controls["Print"].EventHandler = function()
@@ -1142,54 +1143,68 @@ if Controls then
 
 
     -----------------------------------------------------------------------
-    -- Button: Delete (write — digest auth)
+    -- Delete: first press arms ("Confirm?"), second press within 5 s deletes
     -----------------------------------------------------------------------
 
-    Controls["Delete"].EventHandler = function(ctl)
-        local selectedKey = Controls["Files"].String
-        local entry       = PL.State.files[selectedKey]
+    local DELETE_CONFIRM_SECONDS = 5
+    local DELETE_ARMED_COLOR     = "#B3261E"   -- {179,38,30}
+    local deleteIdleColor        = Controls["Delete"].Color
+    local deleteToken            = 0           -- invalidates older disarm timers
 
-        print("DELETE: button pressed, selected='" .. selectedKey .. "'  PL.State.state='" .. PL.State.state .. "'")
+    function PL.disarmDelete()
+        PL.State.deleteArmed     = false
+        deleteToken              = deleteToken + 1
+        Controls["Delete"].Legend = "Delete"
+        Controls["Delete"].Color  = deleteIdleColor
+    end
 
-        if not entry then
-            print("DELETE: no matching entry in PL.State.files — nothing to delete")
-            return
-        end
-
+    -- Returns the selected entry if it may be deleted right now, else nil.
+    local function deletable()
+        local entry = PL.selectedEntry()
+        if not entry then PL.log("DELETE: no file selected"); return nil end
         if PL.State.readOnly[entry.storage] then
-            print("DELETE: storage '" .. entry.storage .. "' is read-only — cannot delete")
+            PL.log("DELETE: storage '" .. entry.storage .. "' is read-only"); return nil
+        end
+        local st = PL.State.state
+        if st == "PRINTING" or st == "PAUSED" then
+            PL.log("DELETE: printer is busy (" .. st .. ")"); return nil
+        end
+        return entry
+    end
+
+    local function removeFile(key)
+        local s = PL.State
+        s.files[key] = nil
+        for i, k in ipairs(s.order) do
+            if k == key then table.remove(s.order, i); break end
+        end
+        PL.applyFiles()   -- also clears the selection and closes the preview
+    end
+
+    Controls["Delete"].EventHandler = function()
+        local entry = deletable()
+        if not entry then PL.disarmDelete(); return end
+
+        if not PL.State.deleteArmed then
+            PL.State.deleteArmed      = true
+            deleteToken               = deleteToken + 1
+            local token               = deleteToken
+            Controls["Delete"].Legend = "Confirm?"
+            Controls["Delete"].Color  = DELETE_ARMED_COLOR
+            Timer.CallAfter(function()
+                if token == deleteToken then PL.disarmDelete() end
+            end, DELETE_CONFIRM_SECONDS)
             return
         end
 
-        if PL.State.state == "PRINTING" or PL.State.state == "PAUSED" then
-            print("DELETE: printer is active — stop the job first")
-            return
-        end
-
-        local url = string.format("http://%s/api/v1/files/%s%s",
-                                  getIP(), entry.storage, entry.path)
-        print("DELETE: DELETE " .. url)
-
-        HttpClient.Download{
-            Url      = url,
-            Method   = "DELETE",
-            User     = getUSER(),
-            Password = getPASS(),
-            EventHandler = function(tbl, code, data, e)
-                print("DELETE: response Code " .. code .. "  " .. (e or ""))
-                if code == 204 then
-                    PL.State.files[selectedKey] = nil
-                    local newChoices = {}
-                    for _, v in ipairs(Controls["Files"].Choices) do
-                        if v ~= selectedKey then newChoices[#newChoices+1] = v end
-                    end
-                    Controls["Files"].Choices = newChoices
-                    print("DELETE: removed '" .. selectedKey .. "' from list")
-                elseif code == 409 then
-                    print("DELETE: conflict — file may be in use (409)")
-                else
-                    print("DELETE ERROR: unexpected code " .. code)
-                end
+        PL.disarmDelete()
+        PL.request{
+            method  = "DELETE",
+            path    = fileUrlPath(entry),
+            onOk    = function() removeFile(entry.key) end,
+            onError = function(code)
+                if code == 409 then PL.log("DELETE: file is in use (409)")
+                else PL.log("DELETE: failed (" .. tostring(code) .. ")") end
             end
         }
     end
