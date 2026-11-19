@@ -106,3 +106,33 @@ function test_successful_delete_closes_panel()
   M.respond(M.find("/api/v1/files/usb/BRACKE~1.BGC"), 204, "")
   assert(M.ctl("Preview").IsInvisible)
 end
+
+-- Hardware check: the picture was small and the details were clipped to one line.
+function test_preview_layout_picture_wide_with_details_below()
+  M.load({})
+  local l = GetControlLayout({ page_index = { Value = 2 } })
+  local img, det = l["Preview Image"], l["Preview Details"]
+  assert(img.Size[1] >= 200, "picture should span the panel width")
+  assert(img.Position[2] + img.Size[2] <= det.Position[2], "details sit below the picture")
+  assert(det.Size[1] >= 200 and det.Size[2] >= 78, "details fit 6 lines")
+end
+
+-- Hardware check: the MINI's file listing carries no print details, so they
+-- are fetched per file (short-name path) when a file without meta is opened.
+function test_meta_fetched_when_missing()
+  setup()
+  PL.State.files["parts/clip"].apiPath = "/PARTS/CLIP~1.GCO"
+  select("parts/clip")
+  local i = M.find("/api/v1/files/usb/PARTS/CLIP~1.GCO")
+  M.respond(i, 200, '{"name":"CLIP~1.GCO","meta":{"filament_type":"PETG","estimated_print_time":2700}}')
+  assert(M.ctl("Preview Details").String == "clip\nPETG\n45m", M.ctl("Preview Details").String)
+  local n = M.count("/api/v1/files/usb/PARTS/CLIP~1.GCO")
+  M.press("Preview"); select("parts/clip")
+  assert(M.count("/api/v1/files/usb/PARTS/CLIP~1.GCO") == n, "meta is cached on the entry")
+end
+
+function test_meta_not_fetched_when_present()
+  setup()
+  select("bracket_v3_PLA")
+  assert(M.count("/api/v1/files/usb/") == 0)
+end

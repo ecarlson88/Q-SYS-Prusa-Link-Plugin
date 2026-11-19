@@ -702,8 +702,8 @@ function GetControlLayout(props)
         IsReadOnly = true,
         ButtonVisualStyle = "Flat",
         StrokeWidth = 0,
-        Position = {37,80},
-        Size = {118,118},
+        Position = {37,70},
+        Size = {216,122},
         ZOrder = 131,
         Color = {27,27,27},
         OffColor = {27,27,27}
@@ -716,8 +716,8 @@ function GetControlLayout(props)
         TextColor = {220,220,220},
         HTextAlign = "Left",
         VTextAlign = "Top",
-        Position = {159,80},
-        Size = {96,190},
+        Position = {37,196},
+        Size = {216,84},
         ZOrder = 132,
         FontSize = 11
        }
@@ -1219,6 +1219,20 @@ if Controls then
         for _, n in ipairs(PREVIEW_CONTROLS) do Controls[n].IsInvisible = false end
         Controls["Preview Details"].String = PL.fileDetails(entry)
         PL.setIcon("Preview Image", nil)
+        if entry.meta == nil then
+            -- The file listing carries no print details on Buddy firmware; ask for this file.
+            entry.meta = {}
+            PL.request{
+                path = fileUrlPath(entry),
+                onOk = function(_, json)
+                    if type(json) == "table" and type(json.meta) == "table" then entry.meta = json.meta end
+                    if PL.State.selected == key then
+                        Controls["Preview Details"].String = PL.fileDetails(entry)
+                    end
+                end,
+                onError = function() entry.meta = nil end
+            }
+        end
         PL.fetchPicture(entry.refs, function(b64)
             if PL.State.selected == key then PL.setIcon("Preview Image", b64) end
         end)
