@@ -71,3 +71,13 @@ function test_progress_controls_sit_below_axis_labels()
   assert(layout["Progress Image"].ZOrder < 101 and layout["Progress Overlay"].ZOrder < 101)
   assert(layout["Progress Overlay"].ZOrder > layout["Progress Image"].ZOrder)
 end
+
+-- Hidden-by-default controls are hidden in the layout too, so they never flash
+-- on screen (or show in Designer) before the runtime script hides them.
+function test_hidden_controls_start_invisible_in_layout()
+  M.load({})
+  local mon = GetControlLayout({ page_index = { Value = 1 } })
+  local ctl = GetControlLayout({ page_index = { Value = 2 } })
+  for _, n in ipairs({ "Progress Image", "Progress Overlay" }) do assert(mon[n].IsInvisible == true, n) end
+  for _, n in ipairs({ "Preview", "Preview Image", "Preview Details" }) do assert(ctl[n].IsInvisible == true, n) end
+end

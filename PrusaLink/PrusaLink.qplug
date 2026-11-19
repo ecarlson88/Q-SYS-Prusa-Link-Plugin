@@ -575,6 +575,7 @@ function GetControlLayout(props)
             FontSize = 17
        }
        layout["Progress Image"] = {
+        IsInvisible = true,
         PrettyName = "Progress~Picture",
         Style = "Button",
         IsReadOnly = true,
@@ -587,6 +588,7 @@ function GetControlLayout(props)
         OffColor = {20, 20, 20}
        }
        layout["Progress Overlay"] = {
+        IsInvisible = true,
         PrettyName = "Progress~Overlay",
         Style = "Button",
         IsReadOnly = true,
@@ -686,6 +688,7 @@ function GetControlLayout(props)
         FontSize = 14
        }
        layout["Preview"] = {
+        IsInvisible = true,
         PrettyName = "Preview~Panel",
         Style = "Button",
         ButtonVisualStyle = "Flat",
@@ -697,6 +700,7 @@ function GetControlLayout(props)
         OffColor = {27,27,27}
        }
        layout["Preview Image"] = {
+        IsInvisible = true,
         PrettyName = "Preview~Picture",
         Style = "Button",
         IsReadOnly = true,
@@ -709,6 +713,7 @@ function GetControlLayout(props)
         OffColor = {27,27,27}
        }
        layout["Preview Details"] = {
+        IsInvisible = true,
         PrettyName = "Preview~Details",
         Style = "Text",
         IsReadOnly = true,
