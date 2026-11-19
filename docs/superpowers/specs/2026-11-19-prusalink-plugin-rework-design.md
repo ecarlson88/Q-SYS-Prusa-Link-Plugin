@@ -19,7 +19,7 @@ The PrusaLink plugin is a personal "fun" project for learning plugin development
 - Fix what is broken today: `getKEY()` is undefined, so every request errors; `getPASS()` is defined twice and reads a `Password` control that doesn't exist; read and write requests use mixed auth.
 - **Delete asks for confirmation.**
 - **Tapping a file shows a preview** (picture plus print details) over the list.
-- **The Monitor page shows print progress on the model picture**, and clicking the knob switches between that and the temperature graph.
+- **The Monitor page shows print progress as the model picture filling with orange**, and clicking the knob switches between that and the temperature graph.
 - Code a developer can read and modify, plus a README with setup instructions.
 
 ## Non-goals
@@ -89,7 +89,7 @@ The maintainer asked for "a .OLD folder or something", so the folder is `.OLD/`.
 5. **Files**: `/api/v1/storage` → `/api/v1/files/{storage}/` → recursive folder walk. Keeps the current `display_name` handling. Each file entry also stores its `refs` and `meta`.
 6. **Job actions**: print, pause/resume, stop.
 7. **Delete with confirmation** (below).
-8. **Pictures**: file preview panel, progress ring, knob view toggle (below).
+8. **Pictures**: file preview panel, progress picture, knob view toggle (below).
 9. **Temperature graphs**: existing EzSVG code, kept as is apart from tidying.
 10. **Startup.**
 
@@ -122,19 +122,22 @@ Mockups: https://claude.ai/artifact/GbpbgzY3Mhxi5bxevy1W27. The maintainer picke
 - Cache pictures per file path for the session.
 - Implementation hint (builder's call): the panel can be a full-size button (the tap target, with visibility toggled), plus a picture button and a details text control layered on top. Check `IsInvisible`/z-order behavior in Q-SYS for overlapping controls.
 
-### Print progress (Monitor page): mockup option B, with a knob toggle
+### Print progress (Monitor page): mockup option A, with a knob toggle
 
-The maintainer picked **2B**: an orange **ring gauge** around the model picture, with the percentage underneath.
+The maintainer picked **2A**: the current job's model picture is shown greyed out and **fills with orange from the bottom** as the print progresses, like PrusaLink's own web page. The percentage sits underneath.
 
 - It uses the same area as the temperature graph (`{44,160}` × `{222,155}`).
 - **Clicking the knob toggles** between the progress view and the EzSVG temperature graph. On the Monitor page the knob is only an image graphic today, so add a transparent, flat **`View Toggle`** button the same size as the knob image (`{99,431}`, 87 × 87), layered over it. The knob image stays; only the click target is new.
-- The ring is drawn with EzSVG, like the graphs. The picture is the current job's `job.file.refs.thumbnail`/`icon`, fetched like the file preview. My suggestion is two layered controls (ring button behind, picture button on top) rather than embedding the PNG inside the SVG, so it doesn't depend on Q-SYS supporting SVG `<image>`. If embedding turns out to work, either way is fine.
-- **Default and idle behavior *(my call)*:** the plugin starts on the graph view. The toggle remembers whichever view was chosen last. When there's no job, the progress view shows the ring at 0% with "No job" and no picture.
+- Picture source: the current job's `job.file.refs.thumbnail`/`icon`, fetched like the file preview and cached per job.
+- Redraw when progress changes, not on every poll.
+- **Default and idle behavior *(my call)*:** the plugin starts on the graph view. The toggle remembers whichever view was chosen last. When there's no job, the progress view shows "No job" and no picture.
 - Temperature samples keep being recorded while the progress view is showing, so the graph has no gap when you switch back.
 
-### Spike first
+**How to draw it.** It is unknown what Q-SYS's SVG renderer supports, so the builder tries these in order and keeps the first that renders correctly on the MINI:
 
-The maintainer's earlier thumbnail attempt hit a dead end, possibly over image format. Before building the rest, a throwaway spike fetches one thumbnail from the MINI with digest auth and shows it on a button via `IconData`. Optionally, the same spike tries embedding the PNG inside an EzSVG document. The rest of the picture work builds on whatever the spike shows.
+1. **One SVG with everything.** An EzSVG document embeds the PNG twice as `<image href="data:image/png;base64,...">`. The bottom copy is greyed with an `feColorMatrix` filter. The top copy is tinted orange and clipped to a rectangle whose height is `progress%` of the model's height. This is the truest to the web page; it needs SVG `<image>`, filters and `clipPath`.
+2. **Two layered controls.** The normal-color picture goes on a button via `IconData`. On top of it sits a second button with a transparent EzSVG overlay: a semi-transparent orange rectangle rising from the bottom. This needs no image embedding; it needs only a transparent SVG over another control.
+3. **Fallback: ring gauge (mockup 2B).** Use this only if neither of the above renders. Tell the maintainer before switching.
 
 ### Versioning and identity
 
@@ -145,7 +148,7 @@ The maintainer's earlier thumbnail attempt hit a dead end, possibly over image f
 ## Testing
 
 - **In the container:** a Lua syntax check (`luac -p`) of the plugin. Offline tests of the parser, folder-walk and delete-confirmation functions, using mock `Controls`/`Timer`/`HttpClient` and sample JSON shaped like the spec.
-- **On the maintainer's machine:** load the plugin in Q-SYS Designer and test against the MINI: connect, bad password, file list, thumbnail, print, pause/resume, stop, delete (confirm and timeout), file preview open and close, the progress ring during a print, the knob toggle, and graphs.
+- **On the maintainer's machine:** load the plugin in Q-SYS Designer and test against the MINI: connect, bad password, file list, thumbnail, print, pause/resume, stop, delete (confirm and timeout), file preview open and close, the progress picture filling during a print, the knob toggle, and graphs.
 
 ## Left to the builder
 
@@ -156,5 +159,4 @@ The maintainer's earlier thumbnail attempt hit a dead end, possibly over image f
 
 ## Out of scope / later
 
-- The orange "fill from the bottom" effect (mockup 2A). A possible later upgrade if SVG image embedding works in Q-SYS.
 - The Prusa Connect plugin (its own design).
