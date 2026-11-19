@@ -137,7 +137,7 @@ The maintainer picked **2A**: the current job's model picture is shown greyed ou
 
 1. **One SVG with everything.** An EzSVG document embeds the PNG twice as `<image href="data:image/png;base64,...">`. The bottom copy is greyed with an `feColorMatrix` filter. The top copy is tinted orange and clipped to a rectangle whose height is `progress%` of the model's height. This is the truest to the web page; it needs SVG `<image>`, filters and `clipPath`.
 2. **Two layered controls.** The normal-color picture goes on a button via `IconData`. On top of it sits a second button with a transparent EzSVG overlay: a semi-transparent orange rectangle rising from the bottom. This needs no image embedding; it needs only a transparent SVG over another control.
-3. **Fallback: ring gauge (mockup 2B).** Use this only if neither of the above renders. Tell the maintainer before switching.
+3. **Fallback: vertical progress bar.** Show the picture as is, with a vertical orange bar beside it (left or right) that fills from the bottom. The bar can be a Q-SYS meter control or an EzSVG rectangle. Use this only if neither of the above renders. Tell the maintainer before switching. *(No ring gauge: the maintainer ruled it out.)*
 
 ### Versioning and identity
 
