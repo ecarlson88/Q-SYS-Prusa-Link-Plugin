@@ -1,8 +1,8 @@
 --- Information block for the plugin
 PluginInfo = {
     Name = "Prusa Link",
-    Version = "0.1",
-    BuildVersion = "0.0.0.1",
+    Version = "1.0",
+    BuildVersion = "1.0.0.0",
     Id = "e778394d-6e3d-2489-be94-bcb44ts1c76e",
     Author = "Erik Carlson",
     Description = "Control and Monitoring of Prusa Printers"  
@@ -16,6 +16,18 @@ function GetColor(props)
    -- Define User configurable Properties of the plugin
 function GetProperties()
       local props = {}
+      table.insert(props, {
+        Name  = "Poll Interval",
+        Type  = "integer",
+        Min   = 1,
+        Max   = 60,
+        Value = 5
+      })
+      table.insert(props, {
+        Name  = "Debug",
+        Type  = "boolean",
+        Value = false
+      })
       return props
     end
     
@@ -131,10 +143,58 @@ function GetPages(props)
       UserPin = false
     })
     table.insert(ctrls, {
-        Name = "API Key",
+        Name = "Username",
         ControlType = "Text",
         Count = 1,
         UserPin = false
+    })
+    table.insert(ctrls, {
+        Name = "Password",
+        ControlType = "Text",
+        Count = 1,
+        UserPin = false
+    })
+    table.insert(ctrls, { -- file preview panel (also its tap-to-close target)
+        Name = "Preview",
+        ControlType = "Button",
+        ButtonType = "Trigger",
+        Count = 1,
+        UserPin = false
+    })
+    table.insert(ctrls, {
+        Name = "Preview Image",
+        ControlType = "Button",
+        ButtonType = "Trigger",
+        Count = 1,
+        UserPin = false
+    })
+    table.insert(ctrls, {
+        Name = "Preview Details",
+        ControlType = "Text",
+        Count = 1,
+        UserPin = false
+    })
+    table.insert(ctrls, { -- Monitor page progress picture
+        Name = "Progress Image",
+        ControlType = "Button",
+        ButtonType = "Trigger",
+        Count = 1,
+        UserPin = false
+    })
+    table.insert(ctrls, {
+        Name = "Progress Overlay",
+        ControlType = "Button",
+        ButtonType = "Trigger",
+        Count = 1,
+        UserPin = false
+    })
+    table.insert(ctrls, { -- invisible click target over the Monitor page knob
+        Name = "View Toggle",
+        ControlType = "Button",
+        ButtonType = "Trigger",
+        Count = 1,
+        UserPin = true,
+        PinStyle = "Input"
     })
     table.insert(ctrls, {
         Name = "Nozzle Temp",
@@ -514,6 +574,41 @@ function GetControlLayout(props)
             Size = {50,35},
             FontSize = 17
        }
+       layout["Progress Image"] = {
+        PrettyName = "Progress~Picture",
+        Style = "Button",
+        IsReadOnly = true,
+        ButtonVisualStyle = "Flat",
+        StrokeWidth = 0,
+        Position = {44,160},
+        Size = {222,155},
+        ZOrder = 110,
+        Color = {20, 20, 20},
+        OffColor = {20, 20, 20}
+       }
+       layout["Progress Overlay"] = {
+        PrettyName = "Progress~Overlay",
+        Style = "Button",
+        IsReadOnly = true,
+        ButtonVisualStyle = "Flat",
+        StrokeWidth = 0,
+        Position = {44,160},
+        Size = {222,155},
+        ZOrder = 111,
+        Color = {0, 0, 0, 0},
+        OffColor = {0, 0, 0, 0}
+       }
+       layout["View Toggle"] = {
+        PrettyName = "View Toggle",
+        Style = "Button",
+        ButtonVisualStyle = "Flat",
+        StrokeWidth = 0,
+        Position = {99,431},
+        Size = {87,87},
+        ZOrder = 120,
+        Color = {0, 0, 0, 0},
+        OffColor = {0, 0, 0, 0}
+       }
 
     elseif CurrentPage == "Control" then      
       
@@ -590,6 +685,42 @@ function GetControlLayout(props)
         ZOrder = 115,
         FontSize = 14
        }
+       layout["Preview"] = {
+        PrettyName = "Preview~Panel",
+        Style = "Button",
+        ButtonVisualStyle = "Flat",
+        StrokeWidth = 1,
+        Position = {31,66},
+        Size = {228,217},
+        ZOrder = 130,
+        Color = {27,27,27},
+        OffColor = {27,27,27}
+       }
+       layout["Preview Image"] = {
+        PrettyName = "Preview~Picture",
+        Style = "Button",
+        IsReadOnly = true,
+        ButtonVisualStyle = "Flat",
+        StrokeWidth = 0,
+        Position = {37,80},
+        Size = {118,118},
+        ZOrder = 131,
+        Color = {27,27,27},
+        OffColor = {27,27,27}
+       }
+       layout["Preview Details"] = {
+        PrettyName = "Preview~Details",
+        Style = "Text",
+        IsReadOnly = true,
+        TextBoxStyle = "NoBackground",
+        TextColor = {220,220,220},
+        HTextAlign = "Left",
+        VTextAlign = "Top",
+        Position = {159,80},
+        Size = {96,190},
+        ZOrder = 132,
+        FontSize = 11
+       }
 
     elseif CurrentPage == "Setup" then        
         
@@ -613,7 +744,7 @@ function GetControlLayout(props)
        })
        table.insert(graphics,{ --API Key Text ---SET
           Type = "Text",
-          Text = "API Key",
+          Text = "Username",
           Position = {80,95},
           Size = {125,25},
           ZOrder = 20,
@@ -624,16 +755,33 @@ function GetControlLayout(props)
        table.insert(graphics,{ --Text
           Type = "Text",
           Text = "Plugin for control of Prusa 3D Printers via the local only Prusa Link API",
-          Position = {30,160},
-          Size = {230,155},
-          FontSize = 18,
+          Position = {30,240},
+          Size = {230,110},
+          FontSize = 14,
           Color = {220,220,220},
           HTextAlign = "Left"
        })
-       layout["API Key"] = {
-           PrettyName = "API Key",
+       table.insert(graphics,{ --Password Text
+          Type = "Text",
+          Text = "Password",
+          Position = {80,155},
+          Size = {125,25},
+          ZOrder = 21,
+          FontSize = 14,
+          Color = {255,255,255},
+          HTextAlign = "Center"
+       })
+       layout["Username"] = {
+           PrettyName = "Username",
            Style = "Text",
            Position = {65,120},
+           Size = {160,30},
+           FontSize = 16
+       }
+       layout["Password"] = {
+           PrettyName = "Password",
+           Style = "Text",
+           Position = {65,180},
            Size = {160,30},
            FontSize = 16
        }
@@ -682,13 +830,14 @@ if Controls then
 
     Controls.Online.IsInvisible = true
 
+    if Controls["Username"].String == "" then Controls["Username"].String = "maker" end
+
     local function getIP()   return Controls["Printer IP"].String end
-    local function getUSER() return "maker"      end
-    local function getPASS() return getKEY()     end
-    local function getPASS() return Controls["Password"].String   end
+    local function getUSER() return Controls["Username"].String end
+    local function getPASS() return Controls["Password"].String end
+    local function getKEY()  return "" end  -- removed in Task 4 (API key auth is gone)
 
     Controls["Printer IP"].EventHandler = function() Files() end
-    Controls["API Key"].EventHandler    = function() Files() end
 
 
     -----------------------------------------------------------------------
