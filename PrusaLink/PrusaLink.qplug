@@ -823,8 +823,6 @@ if Controls then
     nTimer  = Timer.New()
     bTimer  = Timer.New()
 
-    CurrentJobID      = nil
-    CurrentState      = ""
     fileLookup        = {}
     readOnlyStorages  = {}
 
@@ -835,47 +833,167 @@ if Controls then
     local function getIP()   return Controls["Printer IP"].String end
     local function getUSER() return Controls["Username"].String end
     local function getPASS() return Controls["Password"].String end
-    local function getKEY()  return "" end  -- removed in Task 4 (API key auth is gone)
+    local function getKEY()  return "" end  -- transitional: removed once Files/actions move to PL.request
 
-    Controls["Printer IP"].EventHandler = function() Files() end
+
+    -----------------------------------------------------------------------
+    -- State and helpers
+    -----------------------------------------------------------------------
+
+    PL.State = {
+        gen         = 0,        -- bumped on reset; responses from an older gen are ignored
+        jobId       = nil,
+        state       = "",       -- printer state, e.g. "IDLE", "PRINTING", "PAUSED"
+        progress    = nil,      -- current job progress in percent
+        jobRefs     = nil,      -- current job file refs (thumbnail/icon)
+        files       = {},       -- list key -> { key, storage, path, refs, meta, name }
+        order       = {},       -- list keys in display order
+        readOnly    = {},       -- storage name -> true when read-only
+        selected    = nil,      -- selected list key
+        deleteArmed = false,
+        view        = "graph",  -- Monitor page view: "graph" or "progress"
+        pictures    = {},       -- picture path -> base64 PNG
+    }
+
+    -- Prints only when the Debug property is on.
+    function PL.log(...)
+        if Properties["Debug"] and Properties["Debug"].Value then print(...) end
+    end
+
+    -- Percent-encodes each path segment, keeping the slashes.
+    function PL.encodePath(path)
+        return (path:gsub("[^/]+", function(seg)
+            return (seg:gsub("[^%w%-%._~]", function(c)
+                return string.format("%%%02X", c:byte())
+            end))
+        end))
+    end
+
+    local function markOffline(status)
+        Controls.Online.IsInvisible = true
+        Controls.Status.String      = status
+    end
+
+
+    -----------------------------------------------------------------------
+    -- Request helper: every call uses digest auth
+    -----------------------------------------------------------------------
+
+    -- opts: { method, path, raw, onOk(code, json, body), onError(code) }
+    function PL.request(opts)
+        local host = getIP()
+        if host == "" then return end
+        local gen    = PL.State.gen
+        local method = opts.method or "GET"
+        local url    = "http://" .. host .. opts.path
+        PL.log(method .. " " .. url)
+        HttpClient.Download{
+            Url      = url,
+            Method   = method,
+            Timeout  = 5,
+            User     = getUSER(),
+            Password = getPASS(),
+            Auth     = "digest",
+            EventHandler = function(tbl, code, data, err)
+                if gen ~= PL.State.gen then return end   -- stale: printer or login changed
+                if code == 401 then
+                    markOffline("Auth failed")
+                    if opts.onError then opts.onError(401) end
+                elseif not code or code == 0 then
+                    markOffline("Offline")
+                    if opts.onError then opts.onError(0) end
+                elseif code >= 200 and code < 300 then
+                    local json
+                    if not opts.raw and data and data ~= "" then
+                        local ok, v = pcall(rapidjson.decode, data)
+                        if ok then json = v end
+                    end
+                    if opts.onOk then opts.onOk(code, json, data) end
+                else
+                    PL.log("HTTP " .. tostring(code) .. " " .. url .. " " .. tostring(err or ""))
+                    if opts.onError then opts.onError(code) end
+                end
+            end
+        }
+    end
+
+
+    -----------------------------------------------------------------------
+    -- Polling and parsing
+    -----------------------------------------------------------------------
+
+    function PL.parseStatus(resp)
+        local p = resp and resp.printer
+        if type(p) ~= "table" then return end
+        Controls.Online.IsInvisible = false
+        if p.state         then PL.State.state = p.state; Controls.Status.String = p.state end
+        if p.temp_nozzle   then Controls["Nozzle Temp"].Value   = p.temp_nozzle   end
+        if p.target_nozzle then Controls["Nozzle Target"].Value = p.target_nozzle end
+        if p.temp_bed      then Controls["Bed Temp"].Value      = p.temp_bed      end
+        if p.target_bed    then Controls["Bed Target"].Value    = p.target_bed    end
+        if p.speed         then Controls["Print Speed"].Value   = p.speed         end
+        if p.axis_z        then Controls["Z Height"].Value      = p.axis_z        end
+    end
+
+    function PL.parseJob(code, resp)
+        local s = PL.State
+        if code == 204 or type(resp) ~= "table" then
+            Controls.Job.String      = "No Current Job"
+            Controls.Progress.String = ""
+            s.jobId, s.progress, s.jobRefs = nil, nil, nil
+        else
+            s.jobId    = resp.id
+            s.progress = tonumber(resp.progress)
+            local f    = resp.file
+            if type(f) == "table" then
+                Controls.Job.String = f.display_name or f.name or "Unknown"
+                s.jobRefs = f.refs
+                if type(f.meta) == "table" and f.meta.filament_type then
+                    Controls.Material.String = f.meta.filament_type
+                end
+            else
+                Controls.Job.String = "Serial Print"
+                s.jobRefs = nil
+            end
+            Controls.Progress.String = s.progress and string.format("%.0f%%", s.progress) or ""
+        end
+        if PL.onProgress then PL.onProgress() end
+    end
+
+    function PL.poll()
+        if getIP() == "" then return end
+        PL.request{ path = "/api/v1/status", onOk = function(_, json) PL.parseStatus(json) end }
+        PL.request{ path = "/api/v1/job",    onOk = function(code, json) PL.parseJob(code, json) end }
+    end
+
+    -- One-off connect info, logged for troubleshooting.
+    function PL.connectInfo()
+        PL.request{ path = "/api/version", onOk = function(_, _, body) PL.log("VERSION: " .. tostring(body)) end }
+        PL.request{ path = "/api/v1/info", onOk = function(_, _, body) PL.log("INFO: " .. tostring(body)) end }
+    end
+
+    -- Clears everything and reconnects (IP or login changed, or startup).
+    function PL.reset()
+        local s = PL.State
+        s.gen = s.gen + 1
+        s.jobId, s.state, s.progress, s.jobRefs = nil, "", nil, nil
+        s.files, s.order, s.readOnly, s.selected, s.deleteArmed, s.pictures = {}, {}, {}, nil, false, {}
+        Controls["Files"].Choices = {}
+        if getIP() == "" then return end
+        PL.poll()
+        PL.connectInfo()
+        if PL.refreshFiles then PL.refreshFiles() elseif Files then Files() end
+    end
+
+    Controls["Printer IP"].EventHandler = function() PL.reset() end
+    Controls["Username"].EventHandler   = function() PL.reset() end
+    Controls["Password"].EventHandler   = function() PL.reset() end
 
 
     -----------------------------------------------------------------------
     -- API GETs (read-only — API key auth)
     -----------------------------------------------------------------------
 
-    function Printer()
-        local ip = getIP()
-        if ip == "" then return end
-        HttpClient.Download{
-            Url          = "http://" .. ip .. "/api/v1/status",
-            Headers      = { ["X-Api-Key"] = getKEY() },
-            Method       = "GET",
-            EventHandler = PrinterParse
-        }
-    end
-
-    function Info()
-        local ip = getIP()
-        if ip == "" then return end
-        HttpClient.Download{
-            Url          = "http://" .. ip .. "/api/v1/info",
-            Headers      = { ["X-Api-Key"] = getKEY() },
-            Method       = "GET",
-            EventHandler = InfoParse
-        }
-    end
-
-    function Job()
-        local ip = getIP()
-        if ip == "" then return end
-        HttpClient.Download{
-            Url          = "http://" .. ip .. "/api/v1/job",
-            Headers      = { ["X-Api-Key"] = getKEY() },
-            Method       = "GET",
-            EventHandler = JobParse
-        }
-    end
 
     function Files()
         local ip = getIP()
@@ -886,82 +1004,6 @@ if Controls then
             Method       = "GET",
             EventHandler = StorageParse
         }
-    end
-
-
-    -----------------------------------------------------------------------
-    -- Poll loop
-    -----------------------------------------------------------------------
-
-    function Poll()
-        if getIP() ~= "" then
-            Timer.CallAfter(Printer, 0)
-            Timer.CallAfter(Info,    0.5)
-            Timer.CallAfter(Job,     1)
-        end
-    end
-
-
-    -----------------------------------------------------------------------
-    -- Parse: /api/v1/status
-    -----------------------------------------------------------------------
-
-    function PrinterParse(tbl, code, data, e)
-        if code ~= 200 then
-            print("PRINTER ERROR: Code " .. code .. "  " .. (e or ""))
-            Controls.Online.IsInvisible = true
-            return
-        end
-
-        Controls.Online.IsInvisible = false
-
-        local ok, resp = pcall(rapidjson.decode, data)
-        if not ok or not resp then return end
-
-        local p = resp.printer
-        if not p then return end
-
-        if p.state         then CurrentState = p.state; Controls.Status.String = p.state end
-        if p.temp_nozzle   then Controls["Nozzle Temp"].Value   = p.temp_nozzle   end
-        if p.target_nozzle then Controls["Nozzle Target"].Value = p.target_nozzle end
-        if p.temp_bed      then Controls["Bed Temp"].Value      = p.temp_bed      end
-        if p.target_bed    then Controls["Bed Target"].Value    = p.target_bed    end
-        if p.speed         then Controls["Print Speed"].Value   = p.speed         end
-        if p.axis_z        then Controls["Z Height"].Value      = p.axis_z        end
-    end
-
-
-    -----------------------------------------------------------------------
-    -- Parse: /api/v1/job
-    -----------------------------------------------------------------------
-
-    function JobParse(tbl, code, data, e)
-        if code == 204 then
-            Controls.Job.String      = "No Current Job"
-            Controls.Progress.String = ""
-            CurrentJobID = nil
-            return
-        end
-
-        if code ~= 200 then
-            print("JOB ERROR: Code " .. code .. "  " .. (e or ""))
-            return
-        end
-
-        local ok, resp = pcall(rapidjson.decode, data)
-        if not ok or not resp then return end
-
-        CurrentJobID = resp.id
-
-        if resp.file then
-            Controls.Job.String = resp.file.display_name or resp.file.name or "Unknown"
-        else
-            Controls.Job.String = "Serial Print"
-        end
-
-        if resp.progress then
-            Controls.Progress.String = string.format("%.1f%%", resp.progress)
-        end
     end
 
 
@@ -1056,27 +1098,16 @@ if Controls then
 
 
     -----------------------------------------------------------------------
-    -- Parse: /api/v1/info
-    -----------------------------------------------------------------------
-
-    function InfoParse(tbl, code, data, e)
-        if code ~= 200 then
-            print("INFO ERROR: Code " .. code .. "  " .. (e or ""))
-        end
-    end
-
-
-    -----------------------------------------------------------------------
     -- Job action helper (write — digest auth)
     -----------------------------------------------------------------------
 
     local function jobAction(urlSuffix, method, label, onDone)
-        if not CurrentJobID then
-            print(label .. ": no active job ID — CurrentJobID is nil")
+        if not PL.State.jobId then
+            print(label .. ": no active job ID — PL.State.jobId is nil")
             return
         end
         local url = string.format("http://%s/api/v1/job/%d%s",
-                                  getIP(), CurrentJobID, urlSuffix)
+                                  getIP(), PL.State.jobId, urlSuffix)
         print(label .. ": " .. method .. " " .. url)
         HttpClient.Download{
             Url      = url,
@@ -1088,8 +1119,7 @@ if Controls then
                 if code ~= 204 then
                     print(label .. " ERROR: unexpected code " .. code)
                 end
-                Timer.CallAfter(Printer, 0.3)
-                Timer.CallAfter(Job,     0.3)
+                Timer.CallAfter(PL.poll, 0.3)
                 if onDone then onDone() end
             end
         }
@@ -1127,8 +1157,7 @@ if Controls then
                 elseif code ~= 204 then
                     print("PRINT ERROR: unexpected code " .. code)
                 end
-                Timer.CallAfter(Printer, 0.5)
-                Timer.CallAfter(Job,     0.5)
+                Timer.CallAfter(PL.poll, 0.5)
             end
         }
     end
@@ -1139,13 +1168,13 @@ if Controls then
     -----------------------------------------------------------------------
 
     Controls["Pause"].EventHandler = function(ctl)
-        print("PAUSE: button pressed, CurrentState='" .. CurrentState .. "'  CurrentJobID=" .. tostring(CurrentJobID))
-        if CurrentState == "PAUSED" then
+        print("PAUSE: button pressed, PL.State.state='" .. PL.State.state .. "'  PL.State.jobId=" .. tostring(PL.State.jobId))
+        if PL.State.state == "PAUSED" then
             jobAction("/resume", "PUT", "RESUME")
-        elseif CurrentState == "PRINTING" then
+        elseif PL.State.state == "PRINTING" then
             jobAction("/pause",  "PUT", "PAUSE")
         else
-            print("PAUSE: not in a pausable/resumable state (" .. CurrentState .. ")")
+            print("PAUSE: not in a pausable/resumable state (" .. PL.State.state .. ")")
         end
     end
 
@@ -1155,7 +1184,7 @@ if Controls then
     -----------------------------------------------------------------------
 
     Controls["Stop"].EventHandler = function(ctl)
-        print("STOP: button pressed, CurrentState='" .. CurrentState .. "'  CurrentJobID=" .. tostring(CurrentJobID))
+        print("STOP: button pressed, PL.State.state='" .. PL.State.state .. "'  PL.State.jobId=" .. tostring(PL.State.jobId))
         jobAction("", "DELETE", "STOP", function()
             Timer.CallAfter(Files, 1)
         end)
@@ -1170,7 +1199,7 @@ if Controls then
         local selectedKey = Controls["Files"].String
         local entry       = fileLookup[selectedKey]
 
-        print("DELETE: button pressed, selected='" .. selectedKey .. "'  CurrentState='" .. CurrentState .. "'")
+        print("DELETE: button pressed, selected='" .. selectedKey .. "'  PL.State.state='" .. PL.State.state .. "'")
 
         if not entry then
             print("DELETE: no matching entry in fileLookup — nothing to delete")
@@ -1182,7 +1211,7 @@ if Controls then
             return
         end
 
-        if CurrentState == "PRINTING" or CurrentState == "PAUSED" then
+        if PL.State.state == "PRINTING" or PL.State.state == "PAUSED" then
             print("DELETE: printer is active — stop the job first")
             return
         end
@@ -1279,12 +1308,12 @@ if Controls then
 
     nTimer.EventHandler  = NozEZSvG
     bTimer.EventHandler  = BedEZSVG
-    polling.EventHandler = Poll
+    polling.EventHandler = function() PL.poll() end
 
     nTimer:Start(1)
     bTimer:Start(1)
-    polling:Start(5)
+    polling:Start(Properties["Poll Interval"].Value)
 
-    Timer.CallAfter(Files, 1)
+    Timer.CallAfter(function() PL.reset() end, 1)
 
 end

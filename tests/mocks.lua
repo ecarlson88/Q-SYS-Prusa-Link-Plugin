@@ -173,6 +173,21 @@ end
 
 function M.last() return M.requests[#M.requests] end
 
+-- Index of the most recent request whose Url contains `pattern` (plain match).
+function M.find(pattern)
+  for i = #M.requests, 1, -1 do
+    if M.requests[i].Url:find(pattern, 1, true) then return i end
+  end
+  error("no request matching " .. pattern)
+end
+
+-- Number of requests whose Url contains `pattern` (plain match).
+function M.count(pattern)
+  local n = 0
+  for _, r in ipairs(M.requests) do if r.Url:find(pattern, 1, true) then n = n + 1 end end
+  return n
+end
+
 function M.fixture(name)
   local f = assert(io.open("tests/fixtures/" .. name, "rb"))
   local s = f:read("a"); f:close()
