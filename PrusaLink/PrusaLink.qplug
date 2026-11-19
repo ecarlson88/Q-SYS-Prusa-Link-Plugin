@@ -1078,94 +1078,64 @@ if Controls then
 
 
     -----------------------------------------------------------------------
-    -- Job action helper (write — digest auth)
+    -- Selection and job actions
     -----------------------------------------------------------------------
 
-    local function jobAction(urlSuffix, method, label, onDone)
-        if not PL.State.jobId then
-            print(label .. ": no active job ID — PL.State.jobId is nil")
-            return
-        end
-        local url = string.format("http://%s/api/v1/job/%d%s",
-                                  getIP(), PL.State.jobId, urlSuffix)
-        print(label .. ": " .. method .. " " .. url)
-        HttpClient.Download{
-            Url      = url,
-            Method   = method,
-            User     = getUSER(),
-            Password = getPASS(),
-            EventHandler = function(tbl, code, data, e)
-                print(label .. ": response Code " .. code .. "  " .. (e or ""))
-                if code ~= 204 then
-                    print(label .. " ERROR: unexpected code " .. code)
-                end
+    function PL.selectedEntry()
+        local key = PL.State.selected
+        return key and PL.State.files[key] or nil
+    end
+
+    local function fileUrlPath(entry)
+        return "/api/v1/files/" .. PL.encodePath(entry.storage .. entry.path)
+    end
+
+    -- Sends a job/file action; on success polls again (and runs `after`, if given).
+    local function action(method, path, label, after)
+        PL.request{
+            method  = method,
+            path    = path,
+            onOk    = function()
+                PL.log(label .. ": OK")
                 Timer.CallAfter(PL.poll, 0.3)
-                if onDone then onDone() end
-            end
-        }
-    end
-
-
-    -----------------------------------------------------------------------
-    -- Button: Print (write — digest auth)
-    -----------------------------------------------------------------------
-
-    Controls["Print"].EventHandler = function(ctl)
-        local selectedKey = Controls["Files"].String
-        local entry       = PL.State.files[selectedKey]
-
-        print("PRINT: button pressed, selected='" .. selectedKey .. "'")
-
-        if not entry then
-            print("PRINT: no matching entry in PL.State.files — nothing to print")
-            return
-        end
-
-        local url = string.format("http://%s/api/v1/files/%s%s",
-                                  getIP(), entry.storage, entry.path)
-        print("PRINT: POST " .. url)
-
-        HttpClient.Download{
-            Url      = url,
-            Method   = "POST",
-            User     = getUSER(),
-            Password = getPASS(),
-            EventHandler = function(tbl, code, data, e)
-                print("PRINT: response Code " .. code .. "  " .. (e or ""))
+                if after then after() end
+            end,
+            onError = function(code)
                 if code == 409 then
-                    print("PRINT: conflict — job already running or printer not ready (409)")
-                elseif code ~= 204 then
-                    print("PRINT ERROR: unexpected code " .. code)
+                    PL.log(label .. ": printer busy or not ready (409)")
+                else
+                    PL.log(label .. ": failed (" .. tostring(code) .. ")")
                 end
-                Timer.CallAfter(PL.poll, 0.5)
             end
         }
     end
 
+    Controls["Files"].EventHandler = function(ctl)
+        PL.State.selected = ctl.String ~= "" and ctl.String or nil
+    end
 
-    -----------------------------------------------------------------------
-    -- Button: Pause / Resume toggle (write — digest auth)
-    -----------------------------------------------------------------------
+    Controls["Print"].EventHandler = function()
+        local entry = PL.selectedEntry()
+        if not entry then PL.log("PRINT: no file selected"); return end
+        action("POST", fileUrlPath(entry), "PRINT")
+    end
 
-    Controls["Pause"].EventHandler = function(ctl)
-        print("PAUSE: button pressed, PL.State.state='" .. PL.State.state .. "'  PL.State.jobId=" .. tostring(PL.State.jobId))
-        if PL.State.state == "PAUSED" then
-            jobAction("/resume", "PUT", "RESUME")
-        elseif PL.State.state == "PRINTING" then
-            jobAction("/pause",  "PUT", "PAUSE")
+    Controls["Pause"].EventHandler = function()
+        local s = PL.State
+        if not s.jobId then return end
+        if s.state == "PRINTING" then
+            action("PUT", "/api/v1/job/" .. s.jobId .. "/pause", "PAUSE")
+        elseif s.state == "PAUSED" then
+            action("PUT", "/api/v1/job/" .. s.jobId .. "/resume", "RESUME")
         else
-            print("PAUSE: not in a pausable/resumable state (" .. PL.State.state .. ")")
+            PL.log("PAUSE: not pausable in state " .. tostring(s.state))
         end
     end
 
-
-    -----------------------------------------------------------------------
-    -- Button: Stop (write — digest auth)
-    -----------------------------------------------------------------------
-
-    Controls["Stop"].EventHandler = function(ctl)
-        print("STOP: button pressed, PL.State.state='" .. PL.State.state .. "'  PL.State.jobId=" .. tostring(PL.State.jobId))
-        jobAction("", "DELETE", "STOP", function()
+    Controls["Stop"].EventHandler = function()
+        local id = PL.State.jobId
+        if not id then return end
+        action("DELETE", "/api/v1/job/" .. id, "STOP", function()
             Timer.CallAfter(PL.refreshFiles, 1)
         end)
     end
