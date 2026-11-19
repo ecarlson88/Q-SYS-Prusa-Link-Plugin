@@ -926,7 +926,9 @@ if Controls then
                         markOffline("Auth failed")
                         if opts.onError then opts.onError(401) end
                     elseif not code or code == 0 then
-                        markOffline("Offline")
+                        -- Only the status poll decides online/offline; a slow
+                        -- picture or file request failing doesn't mean the printer is gone.
+                        if opts.tracksConnection then markOffline("Offline") end
                         if opts.onError then opts.onError(0) end
                     elseif code >= 200 and code < 300 then
                         local json
@@ -945,7 +947,7 @@ if Controls then
         }
     end
 
-    -- opts: { method, path, raw, onOk(code, json, body), onError(code) }
+    -- opts: { method, path, raw, tracksConnection, onOk(code, json, body), onError(code) }
     function PL.request(opts)
         if getIP() == "" then return end
         local gen    = PL.State.gen
@@ -1004,7 +1006,8 @@ if Controls then
 
     function PL.poll()
         if getIP() == "" then return end
-        PL.request{ path = "/api/v1/status", onOk = function(_, json) PL.parseStatus(json) end }
+        PL.request{ path = "/api/v1/status", tracksConnection = true,
+                    onOk = function(_, json) PL.parseStatus(json) end }
         PL.request{ path = "/api/v1/job",    onOk = function(code, json) PL.parseJob(code, json) end }
     end
 

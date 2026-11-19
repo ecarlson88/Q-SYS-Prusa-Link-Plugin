@@ -53,3 +53,14 @@ function test_lost_reply_does_not_stall_the_queue()
   M.advance(8)
   assert(M.requests[before + 2] and M.requests[before + 2].Url == "http://10.0.0.5/b")
 end
+
+-- Only the status poll decides whether the printer is online; a failed
+-- picture or file request must not flip the panel to "Offline".
+function test_failed_picture_does_not_mark_printer_offline()
+  setup(); M.advance(1.5); M.settle()
+  PL.parseStatus(rapidjson.decode(M.fixture("status_printing.json")))
+  PL.fetchPicture({ thumbnail = "/thumb/l/usb/X.GCO" }, function() end)
+  M.respondTo("/thumb/l/usb/X.GCO", 0, nil)
+  assert(M.ctl("Status").String == "PRINTING", M.ctl("Status").String)
+  assert(M.ctl("Online").IsInvisible == false)
+end
