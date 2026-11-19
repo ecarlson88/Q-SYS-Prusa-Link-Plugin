@@ -1,0 +1,116 @@
+-- THROWAWAY SPIKE: tests fetching a PrusaLink thumbnail and three ways to draw it in Q-SYS.
+-- Load in Designer, fill IP / User / Password / Path, press Fetch, then report what
+-- each of the three picture boxes shows plus the Log text.
+-- Path: copy a "refs.thumbnail" value from http://<printer-ip>/api/v1/files/usb/ in a browser.
+
+PluginInfo = {
+  Name = "Prusa Picture Spike",
+  Version = "0.0",
+  BuildVersion = "0.0.0.1",
+  Id = "5b1f3c1e-9a4d-4e0b-8f61-2d7c0a9e4b11",
+  Author = "Erik Carlson",
+  Description = "Throwaway test: thumbnail fetch and progress drawing",
+}
+
+function GetColor(props) return { 224, 93, 45 } end
+function GetPrettyName(props) return "Prusa Picture Spike" end
+function GetProperties() return {} end
+
+function GetControls(props)
+  local c = {}
+  for _, n in ipairs({ "IP", "User", "Password", "Path", "Log" }) do
+    table.insert(c, { Name = n, ControlType = "Text", Count = 1, UserPin = false })
+  end
+  table.insert(c, { Name = "Fetch", ControlType = "Button", ButtonType = "Trigger", Count = 1, UserPin = false })
+  for _, n in ipairs({ "Plain", "Method1", "Method2", "Method2Overlay" }) do
+    table.insert(c, { Name = n, ControlType = "Button", ButtonType = "Trigger", Count = 1, UserPin = false })
+  end
+  return c
+end
+
+function GetControlLayout(props)
+  local layout, graphics = {}, {}
+  local function label(text, x, y)
+    table.insert(graphics, { Type = "Text", Text = text, Position = { x, y }, Size = { 150, 18 }, FontSize = 11, HTextAlign = "Left" })
+  end
+  local fields = { "IP", "User", "Password", "Path" }
+  for i, n in ipairs(fields) do
+    label(n, 10, 10 + (i - 1) * 26)
+    layout[n] = { Style = "Text", Position = { 80, 10 + (i - 1) * 26 }, Size = { 400, 22 }, FontSize = 11 }
+  end
+  layout["Fetch"] = { Style = "Button", Legend = "Fetch", Position = { 490, 10 }, Size = { 80, 48 } }
+  label("Plain", 10, 116); label("Method 1 (one SVG, 40%)", 170, 116); label("Method 2 (overlay, 40%)", 330, 116)
+  local box = { Size = { 150, 150 }, Style = "Button", ButtonVisualStyle = "Flat", Color = { 20, 20, 20 }, OffColor = { 20, 20, 20 }, StrokeWidth = 0 }
+  local function place(name, x, z)
+    local t = {}
+    for k, v in pairs(box) do t[k] = v end
+    t.Position = { x, 136 }; t.ZOrder = z
+    layout[name] = t
+  end
+  place("Plain", 10, 1); place("Method1", 170, 1); place("Method2", 330, 1); place("Method2Overlay", 330, 2)
+  layout["Method2Overlay"].Color = { 0, 0, 0, 0 }; layout["Method2Overlay"].OffColor = { 0, 0, 0, 0 }
+  label("Log", 10, 296)
+  layout["Log"] = { Style = "Text", Position = { 10, 316 }, Size = { 560, 120 }, FontSize = 10 }
+  return layout, graphics
+end
+
+if Controls then
+  local rapidjson = require("rapidjson")
+  if Controls.User.String == "" then Controls.User.String = "maker" end
+
+  local function log(s) Controls.Log.String = Controls.Log.String .. s .. "\n"; print(s) end
+  local function setIcon(ctl, b64) ctl.Legend = rapidjson.encode({ DrawChrome = false, IconData = b64 }) end
+
+  local function method1(b64, pct)
+    local W, H = 150, 150
+    local fillH = H * pct / 100
+    local img = 'x="0" y="0" width="150" height="150" preserveAspectRatio="xMidYMid meet" '
+             .. 'href="data:image/png;base64,' .. b64 .. '" xlink:href="data:image/png;base64,' .. b64 .. '"'
+    return table.concat({
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="150" height="150" viewBox="0 0 150 150">',
+      '<defs>',
+      '<filter id="grey"><feColorMatrix type="saturate" values="0"/></filter>',
+      '<filter id="orange"><feColorMatrix type="matrix" values="0 0 0 0 0.878  0 0 0 0 0.365  0 0 0 0 0.176  0 0 0 1 0"/></filter>',
+      string.format('<clipPath id="fill"><rect x="0" y="%g" width="%d" height="%g"/></clipPath>', H - fillH, W, fillH),
+      '</defs>',
+      '<image ', img, ' filter="url(#grey)" opacity="0.7"/>',
+      '<g clip-path="url(#fill)"><image ', img, ' filter="url(#orange)"/></g>',
+      '</svg>',
+    })
+  end
+
+  local function overlay(pct)
+    local H = 150
+    local fillH = H * pct / 100
+    return string.format('<svg xmlns="http://www.w3.org/2000/svg" width="150" height="150" viewBox="0 0 150 150">'
+      .. '<rect x="0" y="%g" width="150" height="%g" fill="#e05d2d" fill-opacity="0.55"/></svg>', H - fillH, fillH)
+  end
+
+  Controls.Fetch.EventHandler = function()
+    Controls.Log.String = ""
+    local url = "http://" .. Controls.IP.String .. Controls.Path.String
+    log("GET " .. url)
+    HttpClient.Download{
+      Url = url, Method = "GET", Timeout = 10,
+      User = Controls.User.String, Password = Controls.Password.String, Auth = "digest",
+      EventHandler = function(tbl, code, data, err, headers)
+        data = data or ""
+        log("code=" .. tostring(code) .. " err=" .. tostring(err) .. " bytes=" .. #data)
+        if type(headers) == "table" then
+          for k, v in pairs(headers) do
+            if tostring(k):lower() == "content-type" then log("content-type=" .. tostring(v)) end
+          end
+        end
+        log("png signature=" .. tostring(data:sub(1, 8) == "\137PNG\r\n\26\n"))
+        if code ~= 200 then return end
+        local b64 = Crypto.Base64Encode(data)
+        setIcon(Controls.Plain, b64)
+        setIcon(Controls.Method2, b64)
+        local ok, e = pcall(function() setIcon(Controls.Method1, Crypto.Base64Encode(method1(b64, 40))) end)
+        if not ok then log("method1 error: " .. tostring(e)) end
+        setIcon(Controls.Method2Overlay, Crypto.Base64Encode(overlay(40)))
+        log("done: check the three boxes")
+      end,
+    }
+  end
+end
