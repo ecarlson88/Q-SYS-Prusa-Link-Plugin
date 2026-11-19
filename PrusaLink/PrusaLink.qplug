@@ -823,8 +823,6 @@ if Controls then
     nTimer  = Timer.New()
     bTimer  = Timer.New()
 
-    fileLookup        = {}
-    readOnlyStorages  = {}
 
     Controls.Online.IsInvisible = true
 
@@ -833,7 +831,6 @@ if Controls then
     local function getIP()   return Controls["Printer IP"].String end
     local function getUSER() return Controls["Username"].String end
     local function getPASS() return Controls["Password"].String end
-    local function getKEY()  return "" end  -- transitional: removed once Files/actions move to PL.request
 
 
     -----------------------------------------------------------------------
@@ -982,7 +979,7 @@ if Controls then
         if getIP() == "" then return end
         PL.poll()
         PL.connectInfo()
-        if PL.refreshFiles then PL.refreshFiles() elseif Files then Files() end
+        PL.refreshFiles()
     end
 
     Controls["Printer IP"].EventHandler = function() PL.reset() end
@@ -991,109 +988,92 @@ if Controls then
 
 
     -----------------------------------------------------------------------
-    -- API GETs (read-only — API key auth)
+    -- Files: storage list -> folder listings -> one flat list
     -----------------------------------------------------------------------
 
-
-    function Files()
-        local ip = getIP()
-        if ip == "" then return end
-        HttpClient.Download{
-            Url          = "http://" .. ip .. "/api/v1/storage",
-            Headers      = { ["X-Api-Key"] = getKEY() },
-            Method       = "GET",
-            EventHandler = StorageParse
-        }
-    end
-
-
-    -----------------------------------------------------------------------
-    -- Parse: /api/v1/storage
-    -----------------------------------------------------------------------
-
-    function StorageParse(tbl, code, data, e)
-        if code ~= 200 then
-            print("STORAGE ERROR: Code " .. code .. "  " .. (e or ""))
-            return
-        end
-
-        local ok, resp = pcall(rapidjson.decode, data)
-        if not ok or not resp or not resp.storage_list then return end
-
-        fileLookup = {}
-        Controls["Files"].Choices = {}
-
-        local ip = getIP()
-        for _, storage in ipairs(resp.storage_list) do
-            if storage.available then
-                local path = storage.path or ""
-                local name = string.match(path, "/(%a+)") or path
-                readOnlyStorages[name] = storage.read_only or false
-                HttpClient.Download{
-                    Url          = "http://" .. ip .. "/api/v1/files" .. path .. "/",
-                    Headers      = { ["X-Api-Key"] = getKEY() },
-                    Method       = "GET",
-                    EventHandler = FilesParse
-                }
-            end
-        end
-    end
-
-
-    -----------------------------------------------------------------------
-    -- Parse: /api/v1/files/{storage}/
-    -----------------------------------------------------------------------
-
-    local function stripDisplay(name)
+    local function stripExt(name)
         return (name:gsub("%.bgcode$", ""):gsub("%.gcode$", ""))
     end
 
-    local function processFolder(folder, storageName, basePath)
-        local displays = {}
-        if not folder.children then return displays end
-        for _, child in ipairs(folder.children) do
-            local rawDisplay = child.display_name or child.name
-            local cleanName  = stripDisplay(rawDisplay)
-            -- Use display_name for the API path so we get the full filename, not 8.3
-            local fullPath   = (basePath or "") .. "/" .. (child.display_name or child.name)
-            if child.type == "PRINT_FILE" then
-                table.insert(displays, cleanName)
-                fileLookup[cleanName] = { storage = storageName, path = fullPath }
-            elseif child.type == "FOLDER" then
-                local sub = processFolder(child, storageName, fullPath)
-                for _, v in ipairs(sub) do table.insert(displays, v) end
+    -- Collects print files under `node` into `out`. Folders that arrive without
+    -- their children are added to `missing` (their base path) so they can be fetched.
+    function PL.walkFolder(node, storage, base, out, missing)
+        if type(node) ~= "table" or type(node.children) ~= "table" then return end
+        for _, child in ipairs(node.children) do
+            local name = child.display_name or child.name
+            if type(name) == "string" then
+                local path = (base or "") .. "/" .. name
+                if child.type == "PRINT_FILE" then
+                    local key = stripExt(path:sub(2))
+                    out[#out + 1] = { key = key, storage = storage, path = path,
+                                      refs = child.refs, meta = child.meta, name = stripExt(name) }
+                elseif child.type == "FOLDER" then
+                    if type(child.children) == "table" then
+                        PL.walkFolder(child, storage, path, out, missing)
+                    elseif missing then
+                        missing[#missing + 1] = path
+                    end
+                end
             end
         end
-        return displays
     end
 
-    function FilesParse(tbl, code, data, e)
-        if code ~= 200 then
-            print("FILES ERROR: Code " .. code .. "  " .. (e or ""))
-            return
+    -- Pushes the current file list to the Files control.
+    function PL.applyFiles()
+        local choices = {}
+        for i, k in ipairs(PL.State.order) do choices[i] = k end
+        Controls["Files"].Choices = choices
+        local sel = PL.State.selected
+        if sel and not PL.State.files[sel] then
+            PL.State.selected = nil
+            if PL.closePreview then PL.closePreview() end
         end
+    end
 
-        local ok, jsonData = pcall(rapidjson.decode, data)
-        if not ok or not jsonData then return end
-
-        local storageName = "local"
-        if jsonData.path then
-            storageName = string.match(jsonData.path, "/(%a+)") or "local"
+    -- Adds entries; a key already used by another storage gets " (storage)" appended.
+    local function addFiles(entries)
+        local s = PL.State
+        for _, e in ipairs(entries) do
+            if s.files[e.key] then e.key = e.key .. " (" .. e.storage .. ")" end
+            if not s.files[e.key] then
+                s.files[e.key] = e
+                s.order[#s.order + 1] = e.key
+            end
         end
+        PL.applyFiles()
+    end
 
-        local displays = processFolder(jsonData, storageName, "")
+    local function listFolder(storage, base)
+        PL.request{
+            path = "/api/v1/files/" .. PL.encodePath(storage .. base) .. "/",
+            onOk = function(_, json)
+                local out, missing = {}, {}
+                PL.walkFolder(json, storage, base, out, missing)
+                addFiles(out)
+                for _, folder in ipairs(missing) do listFolder(storage, folder) end
+            end
+        }
+    end
 
-        local existing = Controls["Files"].Choices or {}
-        local merged, seen = {}, {}
-        for _, v in ipairs(existing) do
-            if not seen[v] then merged[#merged+1] = v; seen[v] = true end
-        end
-        for _, v in ipairs(displays) do
-            if not seen[v] then merged[#merged+1] = v; seen[v] = true end
-        end
-
-        Controls["Files"].Choices = merged
-        print("FILES: loaded " .. #merged .. " file(s) from " .. storageName)
+    function PL.refreshFiles()
+        PL.request{
+            path = "/api/v1/storage",
+            onOk = function(_, json)
+                if type(json) ~= "table" or type(json.storage_list) ~= "table" then return end
+                local s = PL.State
+                s.files, s.order, s.readOnly = {}, {}, {}
+                for _, st in ipairs(json.storage_list) do
+                    if st.available then
+                        local name = (st.path or ""):match("^/?([^/]+)") or st.name
+                        if name then
+                            s.readOnly[name] = st.read_only and true or false
+                            listFolder(name, "")
+                        end
+                    end
+                end
+                PL.applyFiles()
+            end
+        }
     end
 
 
@@ -1132,12 +1112,12 @@ if Controls then
 
     Controls["Print"].EventHandler = function(ctl)
         local selectedKey = Controls["Files"].String
-        local entry       = fileLookup[selectedKey]
+        local entry       = PL.State.files[selectedKey]
 
         print("PRINT: button pressed, selected='" .. selectedKey .. "'")
 
         if not entry then
-            print("PRINT: no matching entry in fileLookup — nothing to print")
+            print("PRINT: no matching entry in PL.State.files — nothing to print")
             return
         end
 
@@ -1186,7 +1166,7 @@ if Controls then
     Controls["Stop"].EventHandler = function(ctl)
         print("STOP: button pressed, PL.State.state='" .. PL.State.state .. "'  PL.State.jobId=" .. tostring(PL.State.jobId))
         jobAction("", "DELETE", "STOP", function()
-            Timer.CallAfter(Files, 1)
+            Timer.CallAfter(PL.refreshFiles, 1)
         end)
     end
 
@@ -1197,16 +1177,16 @@ if Controls then
 
     Controls["Delete"].EventHandler = function(ctl)
         local selectedKey = Controls["Files"].String
-        local entry       = fileLookup[selectedKey]
+        local entry       = PL.State.files[selectedKey]
 
         print("DELETE: button pressed, selected='" .. selectedKey .. "'  PL.State.state='" .. PL.State.state .. "'")
 
         if not entry then
-            print("DELETE: no matching entry in fileLookup — nothing to delete")
+            print("DELETE: no matching entry in PL.State.files — nothing to delete")
             return
         end
 
-        if readOnlyStorages[entry.storage] then
+        if PL.State.readOnly[entry.storage] then
             print("DELETE: storage '" .. entry.storage .. "' is read-only — cannot delete")
             return
         end
@@ -1228,7 +1208,7 @@ if Controls then
             EventHandler = function(tbl, code, data, e)
                 print("DELETE: response Code " .. code .. "  " .. (e or ""))
                 if code == 204 then
-                    fileLookup[selectedKey] = nil
+                    PL.State.files[selectedKey] = nil
                     local newChoices = {}
                     for _, v in ipairs(Controls["Files"].Choices) do
                         if v ~= selectedKey then newChoices[#newChoices+1] = v end

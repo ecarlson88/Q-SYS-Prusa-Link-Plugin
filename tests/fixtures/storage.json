@@ -1,0 +1,4 @@
+{"storage_list":[
+  {"path":"/usb","name":"usb","type":"USB","read_only":false,"available":true},
+  {"path":"/local","name":"local","type":"LOCAL","read_only":true,"available":true},
+  {"path":"/sdcard","name":"sdcard","type":"SDCARD","read_only":false,"available":false}]}

@@ -1,0 +1,8 @@
+{"name":"usb","type":"FOLDER","read_only":false,"m_timestamp":1700000000,"children":[
+  {"name":"BRACKE~1.BGC","display_name":"bracket_v3_PLA.bgcode","type":"PRINT_FILE","read_only":false,"size":123456,"m_timestamp":1700000000,
+   "refs":{"icon":"/thumb/s/usb/BRACKE~1.BGC","thumbnail":"/thumb/l/usb/BRACKE~1.BGC","download":"/usb/BRACKE~1.BGC"},
+   "meta":{"filament_type":"PLA","layer_height":0.2,"estimated_print_time":6120,"nozzle_diameter":0.4,"filament used [g]":12.6}},
+  {"name":"PARTS","display_name":"parts","type":"FOLDER","read_only":false,"m_timestamp":1700000000,"children":[
+    {"name":"CLIP~1.GCO","display_name":"clip.gcode","type":"PRINT_FILE","read_only":false,"size":2000,"m_timestamp":1700000000,
+     "refs":{"icon":"/thumb/s/usb/PARTS/CLIP~1.GCO","thumbnail":"/thumb/l/usb/PARTS/CLIP~1.GCO"}}]},
+  {"name":"FIRMWARE.BBF","type":"FIRMWARE","read_only":false,"m_timestamp":1700000000}]}
