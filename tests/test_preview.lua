@@ -6,6 +6,7 @@ local function setup()
   M.load({})
   M.ctl("Printer IP").String = "10.0.0.5"
   M.advance(1.5)
+  M.settle()
   local out = {}
   PL.walkFolder(rapidjson.decode(M.fixture("files_usb.json")), "usb", "", out)
   for _, e in ipairs(out) do PL.State.files[e.key] = e; PL.State.order[#PL.State.order + 1] = e.key end
@@ -102,6 +103,7 @@ end
 function test_successful_delete_closes_panel()
   setup(); PL.State.state = "IDLE"; PL.State.readOnly = { usb = false }
   select("bracket_v3_PLA")
+  M.respondTo("/thumb/", 200, PNG)
   M.press("Delete"); M.press("Delete")
   M.respond(M.find("/api/v1/files/usb/BRACKE~1.BGC"), 204, "")
   assert(M.ctl("Preview").IsInvisible)
@@ -123,6 +125,7 @@ function test_meta_fetched_when_missing()
   setup()
   PL.State.files["parts/clip"].apiPath = "/PARTS/CLIP~1.GCO"
   select("parts/clip")
+  M.respondTo("/thumb/l/usb/PARTS/CLIP~1.GCO", 200, PNG)   -- picture goes first
   local i = M.find("/api/v1/files/usb/PARTS/CLIP~1.GCO")
   M.respond(i, 200, '{"name":"CLIP~1.GCO","meta":{"filament_type":"PETG","estimated_print_time":2700}}')
   assert(M.ctl("Preview Details").String == "clip\nPETG\n45m", M.ctl("Preview Details").String)

@@ -881,42 +881,82 @@ if Controls then
     -- Request helper: every call uses digest auth
     -----------------------------------------------------------------------
 
-    -- opts: { method, path, raw, onOk(code, json, body), onError(code) }
-    function PL.request(opts)
+    -- The printer's small web server drops connections when two requests arrive
+    -- together, so requests wait in a queue and go out one at a time.
+    local REQUEST_TIMEOUT = 5
+    local queue, inFlight, flightToken = {}, false, 0
+
+    local function pump()
+        if inFlight then return end
+        local item
+        repeat
+            item = table.remove(queue, 1)
+        until not item or item.gen == PL.State.gen   -- drop requests for an old printer/login
+        if not item then return end
         local host = getIP()
-        if host == "" then return end
-        local gen    = PL.State.gen
+        if host == "" then queue = {}; return end
+
+        local opts   = item.opts
         local method = opts.method or "GET"
         local url    = "http://" .. host .. opts.path
+        local gen    = item.gen
+        inFlight     = true
+        flightToken  = flightToken + 1
+        local token  = flightToken
+        local function release()
+            if token ~= flightToken or not inFlight then return false end
+            inFlight = false
+            return true
+        end
+        -- Watchdog: if a reply never arrives, free the queue anyway.
+        Timer.CallAfter(function() if release() then pump() end end, REQUEST_TIMEOUT + 2)
+
         PL.log(method .. " " .. url)
         HttpClient.Download{
             Url      = url,
             Method   = method,
-            Timeout  = 5,
+            Timeout  = REQUEST_TIMEOUT,
             User     = getUSER(),
             Password = getPASS(),
             Auth     = "digest",
             EventHandler = function(tbl, code, data, err)
-                if gen ~= PL.State.gen then return end   -- stale: printer or login changed
-                if code == 401 then
-                    markOffline("Auth failed")
-                    if opts.onError then opts.onError(401) end
-                elseif not code or code == 0 then
-                    markOffline("Offline")
-                    if opts.onError then opts.onError(0) end
-                elseif code >= 200 and code < 300 then
-                    local json
-                    if not opts.raw and data and data ~= "" then
-                        local ok, v = pcall(rapidjson.decode, data)
-                        if ok then json = v end
+                if not release() then return end   -- watchdog already gave up on it
+                if gen == PL.State.gen then        -- else stale: printer or login changed
+                    if code == 401 then
+                        markOffline("Auth failed")
+                        if opts.onError then opts.onError(401) end
+                    elseif not code or code == 0 then
+                        markOffline("Offline")
+                        if opts.onError then opts.onError(0) end
+                    elseif code >= 200 and code < 300 then
+                        local json
+                        if not opts.raw and data and data ~= "" then
+                            local ok, v = pcall(rapidjson.decode, data)
+                            if ok then json = v end
+                        end
+                        if opts.onOk then opts.onOk(code, json, data) end
+                    else
+                        PL.log("HTTP " .. tostring(code) .. " " .. url .. " " .. tostring(err or ""))
+                        if opts.onError then opts.onError(code) end
                     end
-                    if opts.onOk then opts.onOk(code, json, data) end
-                else
-                    PL.log("HTTP " .. tostring(code) .. " " .. url .. " " .. tostring(err or ""))
-                    if opts.onError then opts.onError(code) end
                 end
+                pump()
             end
         }
+    end
+
+    -- opts: { method, path, raw, onOk(code, json, body), onError(code) }
+    function PL.request(opts)
+        if getIP() == "" then return end
+        local gen    = PL.State.gen
+        local method = opts.method or "GET"
+        if method == "GET" then   -- same GET already waiting: don't queue it twice
+            for _, q in ipairs(queue) do
+                if q.gen == gen and (q.opts.method or "GET") == "GET" and q.opts.path == opts.path then return end
+            end
+        end
+        queue[#queue + 1] = { opts = opts, gen = gen }
+        pump()
     end
 
 
@@ -1224,6 +1264,9 @@ if Controls then
         for _, n in ipairs(PREVIEW_CONTROLS) do Controls[n].IsInvisible = false end
         Controls["Preview Details"].String = PL.fileDetails(entry)
         PL.setIcon("Preview Image", nil)
+        PL.fetchPicture(entry.refs, function(b64)
+            if PL.State.selected == key then PL.setIcon("Preview Image", b64) end
+        end)
         if entry.meta == nil then
             -- The file listing carries no print details on Buddy firmware; ask for this file.
             entry.meta = {}
@@ -1238,9 +1281,6 @@ if Controls then
                 onError = function() entry.meta = nil end
             }
         end
-        PL.fetchPicture(entry.refs, function(b64)
-            if PL.State.selected == key then PL.setIcon("Preview Image", b64) end
-        end)
     end
 
     Controls["Files"].EventHandler   = function(ctl) PL.openPreview(ctl.String) end

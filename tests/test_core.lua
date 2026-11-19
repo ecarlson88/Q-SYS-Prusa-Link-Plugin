@@ -32,6 +32,7 @@ function test_offline_does_not_error_and_polling_continues()  -- Review Focus 1
   setup(); M.advance(5)
   M.respond(M.find("/api/v1/status"), 0, nil)
   assert(M.ctl("Status").String == "Offline")
+  M.settle()
   local n = M.count("/api/v1/status")
   M.advance(5)
   assert(M.count("/api/v1/status") > n)
@@ -77,6 +78,7 @@ function test_credential_change_resets_and_reconnects()
   setup()
   M.ctl("Password").String = "new"; M.press("Password")
   assert(M.requests[M.find("/api/v1/status")].Password == "new")
+  M.settle()
   assert(M.count("/api/version") == 1 and M.count("/api/v1/info") == 1)
 end
 
@@ -90,6 +92,7 @@ end
 function test_poll_interval_property()
   setup({ ["Poll Interval"] = 10 })
   M.advance(1.5)
+  M.settle()
   local n = M.count("/api/v1/status")
   M.advance(5)
   assert(M.count("/api/v1/status") == n)

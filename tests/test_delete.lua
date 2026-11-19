@@ -4,6 +4,7 @@ local function setup()
   M.load({})
   M.ctl("Printer IP").String = "10.0.0.5"
   M.advance(1.5)
+  M.settle()
   local s = PL.State
   s.files["bracket_v3_PLA"] = { key = "bracket_v3_PLA", storage = "usb", path = "/bracket_v3_PLA.bgcode", apiPath = "/BRACKE~1.BGC" }
   s.files["clip"] = { key = "clip", storage = "usb", path = "/clip.gcode" }
@@ -14,7 +15,11 @@ local function setup()
   s.state = "IDLE"
 end
 
-local function select(key) M.ctl("Files").String = key; M.press("Files") end
+local function select(key)   -- opening a file also fetches its details; let that finish
+  M.ctl("Files").String = key
+  M.press("Files")
+  M.settle()
+end
 
 local function deletes()
   local n = 0

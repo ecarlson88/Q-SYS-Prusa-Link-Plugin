@@ -168,10 +168,27 @@ end
 function M.respond(i, code, body, headers)
   local r = M.requests[i]
   assert(r, "no request #" .. tostring(i))
+  assert(not r.answered, "request #" .. i .. " already answered")
+  r.answered = true
   r.EventHandler(r, code, body, code == 0 and "timeout" or nil, headers or {})
 end
 
 function M.last() return M.requests[#M.requests] end
+
+-- Answers every outstanding request with an empty 204, including ones that
+-- get sent as earlier ones are answered (requests go out one at a time).
+function M.settle()
+  local progressed = true
+  while progressed do
+    progressed = false
+    for i, r in ipairs(M.requests) do
+      if not r.answered then M.respond(i, 204, ""); progressed = true end
+    end
+  end
+end
+
+-- Answers the most recent request whose Url contains `pattern`.
+function M.respondTo(pattern, code, body) M.respond(M.find(pattern), code, body) end
 
 -- Index of the most recent request whose Url contains `pattern` (plain match).
 function M.find(pattern)
