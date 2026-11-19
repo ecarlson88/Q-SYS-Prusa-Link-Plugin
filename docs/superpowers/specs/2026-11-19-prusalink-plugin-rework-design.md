@@ -18,7 +18,8 @@ The PrusaLink plugin is a personal "fun" project for learning plugin development
 - **Digest authentication on every request.** The v1 spec (`Prusa-Link-Web/spec/openapi.yaml`, `1.0.0-draft`) defines only `digestAuth`; `X-Api-Key` is not in it.
 - Fix what is broken today: `getKEY()` is undefined, so every request errors; `getPASS()` is defined twice and reads a `Password` control that doesn't exist; read and write requests use mixed auth.
 - **Delete asks for confirmation.**
-- **Selecting a file shows its thumbnail.**
+- **Tapping a file shows a preview** (picture plus print details) over the list.
+- **The Monitor page shows print progress on the model picture**, and clicking the knob switches between that and the temperature graph.
 - Code a developer can read and modify, plus a README with setup instructions.
 
 ## Non-goals
@@ -88,7 +89,7 @@ The maintainer asked for "a .OLD folder or something", so the folder is `.OLD/`.
 5. **Files**: `/api/v1/storage` → `/api/v1/files/{storage}/` → recursive folder walk. Keeps the current `display_name` handling. Each file entry also stores its `refs` and `meta`.
 6. **Job actions**: print, pause/resume, stop.
 7. **Delete with confirmation** (below).
-8. **Thumbnail** (below).
+8. **Pictures**: file preview panel, progress ring, knob view toggle (below).
 9. **Temperature graphs**: existing EzSVG code, kept as is apart from tidying.
 10. **Startup.**
 
@@ -104,27 +105,36 @@ There's no popup in Q-SYS plugins, so the Delete button confirms itself:
 - A second press within **5 s** sends the delete.
 - If 5 s pass, or a different file is selected, the button goes back to normal.
 - The existing checks stay: no deleting while printing or paused, and no deleting on read-only storage.
+- A successful delete closes the preview panel if it is open, and removes the file from the list.
 
 This adds no new controls and doesn't change the layout. *(My call. The maintainer asked for confirmation but didn't specify the mechanism.)*
 
-### File thumbnail
+### File preview (Control page): mockup option B
 
-- When a file is selected in the Files list, read that entry's `refs.thumbnail`, falling back to `refs.icon`. Use the path exactly as the API returns it. Don't build it: the spec example (`/api/thumbnails/...`) may differ from real firmware.
-- Fetch it with the same digest auth, base64-encode the PNG and set it as `IconData` on a new read-only button **`Thumbnail`**. This is the same technique the temperature graphs use.
-- Placement on the Control page is the empty area to the right of Pause/Stop, about `{140,323}` × `{102,71}`:
+Mockups: https://claude.ai/artifact/GbpbgzY3Mhxi5bxevy1W27. The maintainer picked **1B**.
 
-  ```
-  ┌──────────── Files list ────────────┐
-  │                                    │
-  └────────────────────────────────────┘
-  [ Start Print ] [ Delete    ]
-  [ Pause       ] ┌──────────┐
-  [ Stop        ] │ thumbnail│
-                  └──────────┘
-  ```
-- If there's no thumbnail or the fetch fails, the button is blank. Log the failure only when Debug is on.
-- Cache thumbnails per file path for the session, so re-selecting a file doesn't fetch it again.
-- **Open risk:** the maintainer's earlier attempt at thumbnails hit a dead end, possibly over image format. The spec implies PNG. The first build step is a minimal spike that fetches one thumbnail from the MINI and displays it, before the rest is built on top.
+- Tapping a file in the Files list selects it and opens a **preview panel over the list area** (same position and size as the list, `{31,66}` × `{228,217}`). The panel shows:
+  - the model picture on the left (about 118 × 118),
+  - file details on the right: name, `filament_type`, `layer_height`, estimated time (`estimated_print_time`, formatted as h/m), `nozzle_diameter`, and filament grams. Any field the printer doesn't send is left out.
+- **Tapping the panel closes it** and brings back the list. Start Print and Delete stay where they are and act on the previewed file.
+- Picture source: the entry's `refs.thumbnail`, falling back to `refs.icon`. Use the path exactly as the API returns it; don't build it, because the spec example (`/api/thumbnails/...`) may differ from real firmware. Fetch it with digest auth, base64-encode the PNG and set it as `IconData` on a read-only button. This is the same technique the temperature graphs use.
+- No picture, or a failed fetch: the panel still opens with the details and a blank picture area. Log the failure only when Debug is on.
+- Cache pictures per file path for the session.
+- Implementation hint (builder's call): the panel can be a full-size button (the tap target, with visibility toggled), plus a picture button and a details text control layered on top. Check `IsInvisible`/z-order behavior in Q-SYS for overlapping controls.
+
+### Print progress (Monitor page): mockup option B, with a knob toggle
+
+The maintainer picked **2B**: an orange **ring gauge** around the model picture, with the percentage underneath.
+
+- It uses the same area as the temperature graph (`{44,160}` × `{222,155}`).
+- **Clicking the knob toggles** between the progress view and the EzSVG temperature graph. On the Monitor page the knob is only an image graphic today, so add a transparent, flat **`View Toggle`** button the same size as the knob image (`{99,431}`, 87 × 87), layered over it. The knob image stays; only the click target is new.
+- The ring is drawn with EzSVG, like the graphs. The picture is the current job's `job.file.refs.thumbnail`/`icon`, fetched like the file preview. My suggestion is two layered controls (ring button behind, picture button on top) rather than embedding the PNG inside the SVG, so it doesn't depend on Q-SYS supporting SVG `<image>`. If embedding turns out to work, either way is fine.
+- **Default and idle behavior *(my call)*:** the plugin starts on the graph view. The toggle remembers whichever view was chosen last. When there's no job, the progress view shows the ring at 0% with "No job" and no picture.
+- Temperature samples keep being recorded while the progress view is showing, so the graph has no gap when you switch back.
+
+### Spike first
+
+The maintainer's earlier thumbnail attempt hit a dead end, possibly over image format. Before building the rest, a throwaway spike fetches one thumbnail from the MINI with digest auth and shows it on a button via `IconData`. Optionally, the same spike tries embedding the PNG inside an EzSVG document. The rest of the picture work builds on whatever the spike shows.
 
 ### Versioning and identity
 
@@ -135,17 +145,16 @@ This adds no new controls and doesn't change the layout. *(My call. The maintain
 ## Testing
 
 - **In the container:** a Lua syntax check (`luac -p`) of the plugin. Offline tests of the parser, folder-walk and delete-confirmation functions, using mock `Controls`/`Timer`/`HttpClient` and sample JSON shaped like the spec.
-- **On the maintainer's machine:** load the plugin in Q-SYS Designer and test against the MINI: connect, bad password, file list, thumbnail, print, pause/resume, stop, delete (confirm and timeout), and graphs.
+- **On the maintainer's machine:** load the plugin in Q-SYS Designer and test against the MINI: connect, bad password, file list, thumbnail, print, pause/resume, stop, delete (confirm and timeout), file preview open and close, the progress ring during a print, the knob toggle, and graphs.
 
 ## Left to the builder
 
 - The exact `HttpClient` digest parameter and how the response body arrives for binary PNGs.
 - Whether Q-SYS offers a masked or password text style for the Password field. Use it if available.
 - Which real JSON keys the MINI returns for `refs` and `meta`, and adjusting the parsers to match.
-- Small layout nudges needed to fit Username/Password and the thumbnail. No restyling.
+- Small layout nudges needed to fit Username/Password, the preview panel and the knob toggle. No restyling.
 
 ## Out of scope / later
 
-- Showing the current job's thumbnail on the Monitor page (`job.file.refs`). It's cheap once the thumbnail code exists, but it isn't in v1.0.
-- Showing file metadata (estimated time, filament, layer height) next to the thumbnail.
+- The orange "fill from the bottom" effect (mockup 2A). A possible later upgrade if SVG image embedding works in Q-SYS.
 - The Prusa Connect plugin (its own design).
