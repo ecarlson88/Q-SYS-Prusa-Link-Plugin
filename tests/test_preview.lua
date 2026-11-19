@@ -103,6 +103,6 @@ function test_successful_delete_closes_panel()
   setup(); PL.State.state = "IDLE"; PL.State.readOnly = { usb = false }
   select("bracket_v3_PLA")
   M.press("Delete"); M.press("Delete")
-  M.respond(M.find("/api/v1/files/usb/bracket_v3_PLA.bgcode"), 204, "")
+  M.respond(M.find("/api/v1/files/usb/BRACKE~1.BGC"), 204, "")
   assert(M.ctl("Preview").IsInvisible)
 end

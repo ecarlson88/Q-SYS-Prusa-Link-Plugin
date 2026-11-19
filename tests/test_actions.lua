@@ -4,7 +4,7 @@ local function setup()
   M.load({})
   M.ctl("Printer IP").String = "10.0.0.5"
   M.advance(1.5)  -- let the startup reset run before seeding state
-  PL.State.files["my part"] = { key = "my part", storage = "usb", path = "/my part.bgcode" }
+  PL.State.files["my part"] = { key = "my part", storage = "usb", path = "/my part.bgcode", apiPath = "/MYPART~1.BGC" }
   PL.State.order = { "my part" }
 end
 
@@ -17,7 +17,7 @@ function test_print_posts_encoded_path()
   setup(); select("my part")
   M.press("Print")
   local r = M.last()
-  assert(r.Method == "POST" and r.Url == "http://10.0.0.5/api/v1/files/usb/my%20part.bgcode", r.Url)
+  assert(r.Method == "POST" and r.Url == "http://10.0.0.5/api/v1/files/usb/MYPART~1.BGC", r.Url)
   assert(r.Auth == "digest")
 end
 

@@ -5,7 +5,7 @@ local function setup()
   M.ctl("Printer IP").String = "10.0.0.5"
   M.advance(1.5)
   local s = PL.State
-  s.files["bracket_v3_PLA"] = { key = "bracket_v3_PLA", storage = "usb", path = "/bracket_v3_PLA.bgcode" }
+  s.files["bracket_v3_PLA"] = { key = "bracket_v3_PLA", storage = "usb", path = "/bracket_v3_PLA.bgcode", apiPath = "/BRACKE~1.BGC" }
   s.files["clip"] = { key = "clip", storage = "usb", path = "/clip.gcode" }
   s.files["ro"] = { key = "ro", storage = "local", path = "/ro.gcode" }
   s.order = { "bracket_v3_PLA", "clip", "ro" }
@@ -34,7 +34,7 @@ function test_second_press_deletes_and_removes_from_list()
   setup(); select("bracket_v3_PLA")
   M.press("Delete"); M.press("Delete")
   local r = M.last()
-  assert(r.Method == "DELETE" and r.Url == "http://10.0.0.5/api/v1/files/usb/bracket_v3_PLA.bgcode", r.Url)
+  assert(r.Method == "DELETE" and r.Url == "http://10.0.0.5/api/v1/files/usb/BRACKE~1.BGC", r.Url)
   assert(M.ctl("Delete").Legend == "Delete" and PL.State.deleteArmed == false)
   M.respond(#M.requests, 204, "")
   for _, c in ipairs(M.ctl("Files").Choices) do assert(c ~= "bracket_v3_PLA") end

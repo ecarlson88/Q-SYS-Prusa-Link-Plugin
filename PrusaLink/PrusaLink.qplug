@@ -995,23 +995,30 @@ if Controls then
         return (name:gsub("%.bgcode$", ""):gsub("%.gcode$", ""))
     end
 
-    -- Collects print files under `node` into `out`. Folders that arrive without
-    -- their children are added to `missing` (their base path) so they can be fetched.
-    function PL.walkFolder(node, storage, base, out, missing)
+    -- Collects print files under `node` into `out`.
+    -- `path` uses long display names (for the list); `apiPath` uses the short `name`,
+    -- which is what the printer's own web UI sends. Long names in action URLs have
+    -- crashed a MINI on DELETE, so every request uses `apiPath`.
+    -- Folders that arrive without their children are added to `missing` as
+    -- { path, apiPath } so they can be fetched.
+    function PL.walkFolder(node, storage, base, out, missing, apiBase)
         if type(node) ~= "table" or type(node.children) ~= "table" then return end
+        base, apiBase = base or "", apiBase or base or ""
         for _, child in ipairs(node.children) do
-            local name = child.display_name or child.name
-            if type(name) == "string" then
-                local path = (base or "") .. "/" .. name
+            local long  = child.display_name or child.name
+            local short = child.name or child.display_name
+            if type(long) == "string" and type(short) == "string" then
+                local path    = base .. "/" .. long
+                local apiPath = apiBase .. "/" .. short
                 if child.type == "PRINT_FILE" then
-                    local key = stripExt(path:sub(2))
-                    out[#out + 1] = { key = key, storage = storage, path = path,
-                                      refs = child.refs, meta = child.meta, name = stripExt(name) }
+                    out[#out + 1] = { key = stripExt(path:sub(2)), storage = storage, path = path,
+                                      apiPath = apiPath, refs = child.refs, meta = child.meta,
+                                      name = stripExt(long) }
                 elseif child.type == "FOLDER" then
                     if type(child.children) == "table" then
-                        PL.walkFolder(child, storage, path, out, missing)
+                        PL.walkFolder(child, storage, path, out, missing, apiPath)
                     elseif missing then
-                        missing[#missing + 1] = path
+                        missing[#missing + 1] = { path = path, apiPath = apiPath }
                     end
                 end
             end
@@ -1043,14 +1050,14 @@ if Controls then
         PL.applyFiles()
     end
 
-    local function listFolder(storage, base)
+    local function listFolder(storage, base, apiBase)
         PL.request{
-            path = "/api/v1/files/" .. PL.encodePath(storage .. base) .. "/",
+            path = "/api/v1/files/" .. PL.encodePath(storage .. apiBase) .. "/",
             onOk = function(_, json)
                 local out, missing = {}, {}
-                PL.walkFolder(json, storage, base, out, missing)
+                PL.walkFolder(json, storage, base, out, missing, apiBase)
                 addFiles(out)
-                for _, folder in ipairs(missing) do listFolder(storage, folder) end
+                for _, f in ipairs(missing) do listFolder(storage, f.path, f.apiPath) end
             end
         }
     end
@@ -1067,7 +1074,7 @@ if Controls then
                         local name = (st.path or ""):match("^/?([^/]+)") or st.name
                         if name then
                             s.readOnly[name] = st.read_only and true or false
-                            listFolder(name, "")
+                            listFolder(name, "", "")
                         end
                     end
                 end
@@ -1087,7 +1094,7 @@ if Controls then
     end
 
     local function fileUrlPath(entry)
-        return "/api/v1/files/" .. PL.encodePath(entry.storage .. entry.path)
+        return "/api/v1/files/" .. PL.encodePath(entry.storage .. (entry.apiPath or entry.path))
     end
 
     -- Sends a job/file action; on success polls again (and runs `after`, if given).

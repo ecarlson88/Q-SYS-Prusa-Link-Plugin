@@ -15,6 +15,16 @@ function test_walk_folder_nested_keys_and_refs()
   assert(out[2].key == "parts/clip" and out[2].path == "/parts/clip.gcode", out[2].key .. " " .. out[2].path)
 end
 
+-- Prusa's own web UI addresses files by their short `name`, never `display_name`.
+-- Using the long name for actions crashed a MINI on DELETE, so API paths use `name`.
+function test_api_path_uses_short_names()
+  M.load({})
+  local out = {}
+  PL.walkFolder(rapidjson.decode(M.fixture("files_usb.json")), "usb", "", out)
+  assert(out[1].apiPath == "/BRACKE~1.BGC", tostring(out[1].apiPath))
+  assert(out[2].apiPath == "/PARTS/CLIP~1.GCO", tostring(out[2].apiPath))
+end
+
 function test_refresh_lists_available_storages_only()
   setup(); PL.refreshFiles()
   M.respond(M.find("/api/v1/storage"), 200, M.fixture("storage.json"))
@@ -40,11 +50,11 @@ function test_folder_without_children_is_fetched()
   M.respond(M.find("/api/v1/storage"), 200,
     '{"storage_list":[{"path":"/usb","name":"usb","available":true,"read_only":false}]}')
   M.respond(M.find("/api/v1/files/usb/"), 200,
-    '{"name":"usb","type":"FOLDER","children":[{"name":"my parts","type":"FOLDER"}]}')
-  local i = M.find("/api/v1/files/usb/my%20parts/")
-  M.respond(i, 200, '{"name":"my parts","type":"FOLDER","children":[{"name":"a b.gcode","type":"PRINT_FILE"}]}')
+    '{"name":"usb","type":"FOLDER","children":[{"name":"MYPART~1","display_name":"my parts","type":"FOLDER"}]}')
+  local i = M.find("/api/v1/files/usb/MYPART~1/")
+  M.respond(i, 200, '{"name":"MYPART~1","type":"FOLDER","children":[{"name":"a b.gcode","type":"PRINT_FILE"}]}')
   local e = PL.State.files["my parts/a b"]
-  assert(e and e.path == "/my parts/a b.gcode")
+  assert(e and e.path == "/my parts/a b.gcode" and e.apiPath == "/MYPART~1/a b.gcode")
 end
 
 function test_missing_refs_and_meta_do_not_crash()  -- Review Focus 5
