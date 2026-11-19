@@ -56,3 +56,18 @@ function test_username_defaults_to_maker()
   M.load({})
   assert(M.ctl("Username").String == "maker")
 end
+
+-- Hardware check: the progress controls drew a black box over the graph's
+-- °C axis labels (graphics at ZOrder 101-105) on the Monitor page.
+function test_progress_controls_hidden_at_start()
+  M.load({})
+  assert(M.ctl("Progress Image").IsInvisible == true)
+  assert(M.ctl("Progress Overlay").IsInvisible == true)
+end
+
+function test_progress_controls_sit_below_axis_labels()
+  M.load({})
+  local layout = GetControlLayout({ page_index = { Value = 1 } })
+  assert(layout["Progress Image"].ZOrder < 101 and layout["Progress Overlay"].ZOrder < 101)
+  assert(layout["Progress Overlay"].ZOrder > layout["Progress Image"].ZOrder)
+end

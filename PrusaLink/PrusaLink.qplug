@@ -582,7 +582,7 @@ function GetControlLayout(props)
         StrokeWidth = 0,
         Position = {44,160},
         Size = {222,155},
-        ZOrder = 110,
+        ZOrder = 98,
         Color = {20, 20, 20},
         OffColor = {20, 20, 20}
        }
@@ -594,7 +594,7 @@ function GetControlLayout(props)
         StrokeWidth = 0,
         Position = {44,160},
         Size = {222,155},
-        ZOrder = 111,
+        ZOrder = 99,
         Color = {0, 0, 0, 0},
         OffColor = {0, 0, 0, 0}
        }
@@ -1227,6 +1227,10 @@ if Controls then
     Controls["Files"].EventHandler   = function(ctl) PL.openPreview(ctl.String) end
     Controls["Preview"].EventHandler = function() PL.closePreview() end
     PL.closePreview()
+
+    -- Monitor page starts on the temperature graph; the progress picture stays hidden.
+    Controls["Progress Image"].IsInvisible   = true
+    Controls["Progress Overlay"].IsInvisible = true
 
 
     -----------------------------------------------------------------------
