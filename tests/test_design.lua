@@ -81,3 +81,36 @@ function test_hidden_controls_start_invisible_in_layout()
   for _, n in ipairs({ "Progress Image", "Progress Overlay" }) do assert(mon[n].IsInvisible == true, n) end
   for _, n in ipairs({ "Preview", "Preview Image", "Preview Details" }) do assert(ctl[n].IsInvisible == true, n) end
 end
+
+-- The graph's °C axis labels are controls (not graphics) so the progress
+-- view can hide them. Same text, positions and style as the old graphics.
+local AXIS = {
+  { "Axis 300C", "300°C", { 23, 153 } },
+  { "Axis 225C", "225°C", { 22, 190 } },
+  { "Axis 150C", "150°C", { 22, 228 } },
+  { "Axis 75C",  "75°C",  { 22, 266 } },
+  { "Axis 0C",   "0°C",   { 22, 303 } },
+}
+
+function test_axis_labels_are_controls_not_graphics()
+  M.load({})
+  local layout, graphics = GetControlLayout({ page_index = { Value = 1 } })
+  for _, a in ipairs(AXIS) do
+    local l = layout[a[1]]
+    assert(l, a[1] .. " missing from layout")
+    assert(l.Position[1] == a[3][1] and l.Position[2] == a[3][2], a[1] .. " moved")
+    assert(l.IsReadOnly == true and l.TextBoxStyle == "NoBackground")
+  end
+  for _, g in ipairs(graphics) do
+    assert(not (g.Type == "Text" and tostring(g.Text):find("°C$") and g.FontSize == 9),
+           "axis label still a graphic: " .. tostring(g.Text))
+  end
+end
+
+function test_axis_labels_show_their_text_at_start()
+  M.load({})
+  for _, a in ipairs(AXIS) do
+    assert(M.ctl(a[1]).String == a[2], a[1] .. " = " .. M.ctl(a[1]).String)
+    assert(M.ctl(a[1]).IsInvisible == false)
+  end
+end
