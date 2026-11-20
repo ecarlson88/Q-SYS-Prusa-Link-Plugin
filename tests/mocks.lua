@@ -120,10 +120,12 @@ local function buildProperties(overrides)
   return props
 end
 
-function M.load(overrides)
+-- Loads a plugin file (default: the PrusaLink plugin) with mocked Q-SYS globals.
+function M.load(overrides, pluginPath)
+  local plugin = pluginPath or M.PLUGIN
   clock, oneShots, timers = 0, {}, {}
   M.requests, M.logs = {}, {}
-  PL, Controls, Properties = nil, nil, nil
+  PL, PC, Controls, Properties = nil, nil, nil, nil
 
   print = function(...)
     local parts = {}
@@ -138,7 +140,7 @@ function M.load(overrides)
   Crypto = { Base64Encode = base64 }
 
   -- Pass 1: design-time functions only (Controls is nil, so the runtime block is skipped).
-  assert(loadfile(M.PLUGIN, "t", _G))()
+  assert(loadfile(plugin, "t", _G))()
   Properties = buildProperties(overrides)
 
   local ctls = {}
@@ -146,12 +148,15 @@ function M.load(overrides)
   Controls = ctls
 
   -- Pass 2: runtime.
-  assert(loadfile(M.PLUGIN, "t", _G))()
+  assert(loadfile(plugin, "t", _G))()
 end
 
 ---------------------------------------------------------------------------
 -- Helpers for tests
 ---------------------------------------------------------------------------
+
+M.CONNECT = "PrusaConnect/PrusaConnect.qplug"
+function M.loadConnect(overrides) M.load(overrides, M.CONNECT) end
 
 function M.ctl(name)
   local c = Controls[name]
