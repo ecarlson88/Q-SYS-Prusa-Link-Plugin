@@ -139,7 +139,9 @@ function test_material_fetched_from_job_file_once_per_job()
   local n = M.count("/api/v1/files/usb/BRACKE~1.BGC")
   PL.parseJob(200, jobWithoutMeta())
   assert(M.count("/api/v1/files/usb/BRACKE~1.BGC") == n, "same job: no new lookup")
+  M.settle()   -- the progress picture request is ahead in the queue
   PL.parseJob(200, jobWithoutMeta(298))
+  M.settle()
   assert(M.count("/api/v1/files/usb/BRACKE~1.BGC") == n + 1, "new job: look up again")
 end
 

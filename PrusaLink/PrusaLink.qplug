@@ -1276,20 +1276,28 @@ if Controls then
         Controls[ctlName].Legend = rapidjson.encode({ DrawChrome = false, IconData = b64 or "" })
     end
 
-    -- cb(base64 or nil). Uses refs.thumbnail, else refs.icon, exactly as the API gave it.
+    -- Width and height from a PNG's header, or nil.
+    local function pngSize(body)
+        if #body < 24 or body:sub(1, 8) ~= "\137PNG\r\n\26\n" then return nil end
+        local function be32(i) local a, b, c, d = body:byte(i, i + 3); return ((a * 256 + b) * 256 + c) * 256 + d end
+        return be32(17), be32(21)
+    end
+
+    -- cb(base64 or nil, width, height). Uses refs.thumbnail, else refs.icon, exactly as the API gave it.
     function PL.fetchPicture(refs, cb)
         local path = type(refs) == "table" and (refs.thumbnail or refs.icon) or nil
         if type(path) ~= "string" then cb(nil); return end
         local cached = PL.State.pictures[path]
-        if cached then cb(cached); return end
+        if cached then cb(cached.b64, cached.w, cached.h); return end
         PL.request{
             path    = path,
             raw     = true,
             onOk    = function(_, _, body)
                 if not body or body == "" then cb(nil); return end
-                local b64 = Crypto.Base64Encode(body)
-                PL.State.pictures[path] = b64
-                cb(b64)
+                local w, h = pngSize(body)
+                local pic = { b64 = Crypto.Base64Encode(body), w = w, h = h }
+                PL.State.pictures[path] = pic
+                cb(pic.b64, pic.w, pic.h)
             end,
             onError = function(code)
                 PL.log("PICTURE: " .. path .. " failed (" .. tostring(code) .. ")")
@@ -1372,9 +1380,92 @@ if Controls then
                        ["Axis 75C"] = "75°C", ["Axis 0C"] = "0°C" }
     for name, text in pairs(PL.AXIS_LABELS) do Controls[name].String = text end
 
-    -- Monitor page starts on the temperature graph; the progress picture stays hidden.
-    Controls["Progress Image"].IsInvisible   = true
-    Controls["Progress Overlay"].IsInvisible = true
+
+
+    -----------------------------------------------------------------------
+    -- Monitor page: progress picture (greyed model fills with colour) and the
+    -- knob toggle between it and the temperature graph
+    -----------------------------------------------------------------------
+
+    local PROG_W, PROG_H   = 222, 155       -- size of the Progress Image button
+    local UNPRINTED_OPACITY = "0.35"
+    local EDGE_COLOR        = "#ff7a2f"
+    local AXIS_CONTROLS     = { "Axis 300C", "Axis 225C", "Axis 150C", "Axis 75C", "Axis 0C" }
+
+    local function fmt(v) return (string.format("%.1f", v):gsub("%.0$", "")) end
+
+    -- One SVG: the picture greyed and dimmed above the fill line, full colour below it.
+    -- iw/ih (picture size) let the fill follow the picture's drawn height; without
+    -- them the whole box is used.
+    function PL.progressSvg(b64, pct, iw, ih)
+        pct = math.max(0, math.min(100, tonumber(pct) or 0))
+        local y0, dh = 0, PROG_H
+        if iw and ih and iw > 0 and ih > 0 then
+            local scale = math.min(PROG_W / iw, PROG_H / ih)
+            dh = ih * scale
+            y0 = (PROG_H - dh) / 2
+        end
+        local edge = y0 + dh * (1 - pct / 100)
+        local img = string.format('x="0" y="0" width="%d" height="%d" preserveAspectRatio="xMidYMid meet" ' ..
+                                  'href="data:image/png;base64,%s" xlink:href="data:image/png;base64,%s"',
+                                  PROG_W, PROG_H, b64, b64)
+        local parts = {
+            string.format('<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" ' ..
+                          'width="%d" height="%d" viewBox="0 0 %d %d">', PROG_W, PROG_H, PROG_W, PROG_H),
+            '<defs><filter id="grey"><feColorMatrix type="saturate" values="0"/></filter>',
+            string.format('<clipPath id="todo"><rect x="0" y="0" width="%d" height="%s"/></clipPath>', PROG_W, fmt(edge)),
+            string.format('<clipPath id="done"><rect x="0" y="%s" width="%d" height="%s"/></clipPath>',
+                          fmt(edge), PROG_W, fmt(PROG_H - edge)),
+            '</defs>',
+            '<g clip-path="url(#todo)"><image ' .. img .. ' filter="url(#grey)" opacity="' .. UNPRINTED_OPACITY .. '"/></g>',
+            '<g clip-path="url(#done)"><image ' .. img .. '/></g>',
+        }
+        if pct > 0 and pct < 100 then
+            parts[#parts + 1] = string.format('<line x1="0" y1="%s" x2="%d" y2="%s" stroke="%s" stroke-width="2"/>',
+                                              fmt(edge), PROG_W, fmt(edge), EDGE_COLOR)
+        end
+        parts[#parts + 1] = '</svg>'
+        return table.concat(parts)
+    end
+
+    local lastProgressKey = nil
+
+    -- Called by parseJob after every job poll; redraws only when something changed.
+    function PL.onProgress()
+        local s    = PL.State
+        local refs = s.jobRefs
+        local path = type(refs) == "table" and (refs.thumbnail or refs.icon) or nil
+        if not s.jobId or not path then
+            if lastProgressKey ~= nil then PL.setIcon("Progress Image", nil) end
+            lastProgressKey = nil
+            return
+        end
+        local key = tostring(s.jobId) .. "|" .. path .. "|" .. tostring(s.progress)
+        if key == lastProgressKey then return end
+        lastProgressKey = key
+        local jobId, pct = s.jobId, s.progress or 0
+        PL.fetchPicture(refs, function(b64, w, h)
+            if PL.State.jobId ~= jobId then return end
+            if not b64 then PL.setIcon("Progress Image", nil); return end
+            PL.lastProgressSvg = PL.progressSvg(b64, pct, w, h)
+            PL.setIcon("Progress Image", Crypto.Base64Encode(PL.lastProgressSvg))
+        end)
+    end
+
+    -- view: "graph" (temperature graph + axis labels) or "progress" (picture).
+    function PL.setView(view)
+        PL.State.view = view
+        local graph = view ~= "progress"
+        Controls.nGraph.IsInvisible = not graph
+        Controls.bGraph.IsInvisible = not graph
+        for _, n in ipairs(AXIS_CONTROLS) do Controls[n].IsInvisible = not graph end
+        Controls["Progress Image"].IsInvisible   = graph
+        Controls["Progress Overlay"].IsInvisible = true   -- not used by this method
+    end
+
+    Controls["View Toggle"].EventHandler = function()
+        PL.setView(PL.State.view == "progress" and "graph" or "progress")
+    end
 
 
     -----------------------------------------------------------------------
@@ -1508,6 +1599,8 @@ if Controls then
 
     nTimer.EventHandler  = NozEZSvG
     bTimer.EventHandler  = BedEZSVG
+    PL.setView("graph")   -- Monitor page starts on the temperature graph
+
     polling.EventHandler = function() PL.poll() end
 
     nTimer:Start(1)
