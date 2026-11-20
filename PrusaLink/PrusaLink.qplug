@@ -1115,10 +1115,28 @@ if Controls then
         end
     end
 
-    -- Pushes the current file list to the Files control.
+    -- Longest list entry that fits the Files list without sideways scrolling.
+    local LIST_MAX_CHARS = 24
+
+    local function shorten(text, max)
+        if utf8.len(text) <= max then return text end
+        return text:sub(1, utf8.offset(text, max) - 1) .. "…"   -- max-1 chars + "…"
+    end
+
+    -- Pushes the current file list to the Files control. Long names are shortened;
+    -- PL.State.display maps each shown entry back to its file key.
     function PL.applyFiles()
-        local choices = {}
-        for i, k in ipairs(PL.State.order) do choices[i] = k end
+        local choices, display = {}, {}
+        for i, k in ipairs(PL.State.order) do
+            local shown, n = shorten(k, LIST_MAX_CHARS), 2
+            while display[shown] do   -- two names shortened to the same text
+                local tag = " " .. n
+                shown, n = shorten(k, LIST_MAX_CHARS - #tag) .. tag, n + 1
+            end
+            display[shown] = k
+            choices[i] = shown
+        end
+        PL.State.display = display
         Controls["Files"].Choices = choices
         local sel = PL.State.selected
         if sel and not PL.State.files[sel] then
@@ -1328,7 +1346,9 @@ if Controls then
         end
     end
 
-    Controls["Files"].EventHandler   = function(ctl) PL.openPreview(ctl.String) end
+    Controls["Files"].EventHandler   = function(ctl)
+        PL.openPreview((PL.State.display or {})[ctl.String] or ctl.String)
+    end
     Controls["Preview"].EventHandler = function() PL.closePreview() end
     PL.closePreview()
 

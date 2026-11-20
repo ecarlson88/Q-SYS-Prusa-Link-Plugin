@@ -87,3 +87,30 @@ function test_refresh_replaces_old_list()
   local c = M.ctl("Files").Choices
   assert(#c == 1 and c[1] == "new", table.concat(c, ","))
 end
+
+-- Hardware feedback: long names made the list scroll sideways.
+local LONG1 = "Benchy_0.15mm_PLA_MINI_1h12m_final_v3"
+local LONG2 = "Benchy_0.15mm_PLA_MINI_1h12m_final_v4"
+
+local function listOf(keys)
+  M.load({})
+  for _, k in ipairs(keys) do
+    PL.State.files[k] = { key = k, name = k, storage = "usb", path = "/" .. k .. ".bgcode" }
+    PL.State.order[#PL.State.order + 1] = k
+  end
+  PL.applyFiles()
+  return M.ctl("Files").Choices
+end
+
+function test_long_names_are_shortened_in_the_list()
+  local c = listOf({ LONG1, "short" })
+  assert(utf8.len(c[1]) <= 24 and c[1]:sub(-3) == "…", c[1])
+  assert(c[2] == "short")
+end
+
+function test_shortened_names_stay_distinct_and_open_the_right_file()
+  local c = listOf({ LONG1, LONG2 })
+  assert(c[1] ~= c[2] and utf8.len(c[2]) <= 24, c[1] .. " / " .. c[2])
+  M.ctl("Files").String = c[2]; M.press("Files")
+  assert(PL.State.selected == LONG2)
+end
