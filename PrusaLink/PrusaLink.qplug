@@ -269,9 +269,9 @@ function GetPages(props)
     table.insert(ctrls, {
         Name = "Z Height",
         ControlType = "Knob",
-        ControlUnit = "Integer",
+        ControlUnit = "Float",
         Min = 0,
-        Max = 100
+        Max = 400
     })
     table.insert(ctrls, {
         Name = "Print Speed",
@@ -487,9 +487,9 @@ function GetControlLayout(props)
             Style = "Text",
             TextBoxStyle = "NoBackground",
             TextColor = {255,255,255},
-            Position = {147,394},
-            Size = {40,29},
-            FontSize = 17
+            Position = {144,394},
+            Size = {48,29},
+            FontSize = 14
        }
        layout["Nozzle Temp"] = {
             PrettyName = "Nozzle Actual",
@@ -733,8 +733,8 @@ function GetControlLayout(props)
         Style = "Button",
         ButtonVisualStyle = "Flat",
         StrokeWidth = 1,
-        Position = {31,66},
-        Size = {228,217},
+        Position = {28,63},
+        Size = {234,223},
         ZOrder = 130,
         Color = {27,27,27},
         OffColor = {27,27,27}

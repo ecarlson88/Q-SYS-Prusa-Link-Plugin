@@ -114,3 +114,28 @@ function test_axis_labels_show_their_text_at_start()
     assert(M.ctl(a[1]).IsInvisible == false)
   end
 end
+
+-- Hardware feedback: "60%" was cut off on both sides of the Print Speed box.
+function test_print_speed_box_fits_percent()
+  M.load({})
+  local l = GetControlLayout({ page_index = { Value = 1 } })
+  assert(l["Print Speed"].Size[1] >= 46 and l["Print Speed"].FontSize <= 14)
+end
+
+-- Z Height must show decimals and tall prints (MINI is 180 mm, XL 360 mm).
+function test_z_height_is_a_float_with_room()
+  M.load({})
+  local z
+  for _, c in ipairs(GetControls({})) do if c.Name == "Z Height" then z = c end end
+  assert(z.ControlUnit == "Float" and z.Max >= 400)
+end
+
+-- Hardware feedback: the list's scrollbars showed around the preview panel.
+function test_preview_panel_covers_the_list_edges()
+  M.load({})
+  local l = GetControlLayout({ page_index = { Value = 2 } })
+  local list, panel = l["Files"], l["Preview"]
+  assert(panel.Position[1] < list.Position[1] and panel.Position[2] < list.Position[2])
+  assert(panel.Position[1] + panel.Size[1] > list.Position[1] + list.Size[1])
+  assert(panel.Position[2] + panel.Size[2] > list.Position[2] + list.Size[2])
+end
