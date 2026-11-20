@@ -749,6 +749,18 @@ function GetControlLayout(props)
     elseif CurrentPage == "Files" then      
       
  -----Files Page (PrusaLink's Control page)
+       layout["Control Status"] = {
+        PrettyName = "Files~Status",
+        Style = "Text",
+        IsReadOnly = true,
+        TextBoxStyle = "NoBackground",
+        TextColor = {220,220,220},
+        HTextAlign = "Center",
+        Position = {140,323},
+        Size = {102,71},
+        FontSize = 10,
+        ZOrder = 70
+       }
 
        table.insert(graphics, { --Image Knob Right -- SET
          Type = "Image",
@@ -1361,6 +1373,312 @@ if Controls then
         drawGraphs()
     end)
     chain("onSelectedUpdate", function(dev) PC.showMonitor(dev) end)
+
+
+    -----------------------------------------------------------------------
+    -- Printer commands (pause/resume/stop and the Control page)
+    -----------------------------------------------------------------------
+
+    -- Last action result, shown on the Files and Control pages.
+    function PC.notice(text)
+        Controls["Control Status"].String = text
+        PC.log("NOTICE: " .. text)
+    end
+
+    -- True when the device lists the verb (in `verbs` or `capabilities`). A device
+    -- record with neither list is given the benefit of the doubt.
+    function PC.supports(dev, verb)
+        local lists, any = { dev and dev.verbs, dev and dev.capabilities }, false
+        for _, l in ipairs(lists) do
+            if type(l) == "table" then
+                for _, v in ipairs(l) do
+                    any = true
+                    if v == verb then return true end
+                end
+            end
+        end
+        return not any
+    end
+
+    local function devicePath(dev, suffix) return "/api/v1/devices/" .. PC.urlEncode(dev.id) .. suffix end
+
+    -- Sends core.command.<verb> to the selected printer. args values are sent as strings.
+    function PC.command(verb, args, label)
+        local dev = PC.selectedDevice()
+        if not dev then PC.notice("Select a printer first"); return false end
+        local full = "core.command." .. verb
+        if not PC.supports(dev, full) then PC.notice("Not supported by this printer"); return false end
+        local payload = { verb = full }
+        if args then
+            payload.args = {}
+            for k, v in pairs(args) do payload.args[k] = tostring(v) end
+        end
+        PC.request{
+            method = "POST",
+            path   = devicePath(dev, "/commands"),
+            body   = rapidjson.encode(payload),
+            onOk   = function(_, json)
+                if type(json) == "table" and json.ok == false then PC.notice("Refused: " .. label)
+                else PC.notice("Sent: " .. label) end
+                Timer.CallAfter(PC.pollFarm, 0.5)
+            end,
+            onError = function(code) PC.notice(label .. " failed (" .. tostring(code) .. ")") end
+        }
+        return true
+    end
+
+    local function selectedState()
+        local dev = PC.selectedDevice()
+        return dev and PC.deviceState(dev) or ""
+    end
+
+
+    -----------------------------------------------------------------------
+    -- Files page: storages -> folders -> one flat list (selected printer)
+    -----------------------------------------------------------------------
+
+    local PRINT_EXT = { gcode = true, bgcode = true, gco = true, bgc = true, g = true }
+
+    local function ext(name) return (tostring(name):match("%.([%w]+)$") or ""):lower() end
+    local function stripExt(name)
+        local e = ext(name)
+        if PRINT_EXT[e] then return (tostring(name):gsub("%.[%w]+$", "")) end
+        return tostring(name)
+    end
+    local function trimSlash(p) return (tostring(p or ""):gsub("^/+", ""):gsub("/+$", "")) end
+
+    function PC.formatSize(bytes)
+        bytes = tonumber(bytes)
+        if not bytes then return nil end
+        if bytes >= 1e6 then return string.format("%.1f MB", bytes / 1e6) end
+        if bytes >= 1e3 then return string.format("%.0f KB", bytes / 1e3) end
+        return string.format("%d B", bytes)
+    end
+
+    function PC.applyFiles()
+        local choices = {}
+        for i, k in ipairs(PC.State.order) do choices[i] = k end
+        Controls["Files"].Choices = choices
+        local sel = PC.State.selected
+        if sel and not PC.State.files[sel] then
+            PC.State.selected = nil
+            if PC.closePreview then PC.closePreview() end
+        end
+    end
+
+    local function addFile(e)
+        local s = PC.State
+        if s.files[e.key] then e.key = e.key .. " (" .. e.storage .. ")" end
+        if s.files[e.key] then return end
+        s.files[e.key] = e
+        s.order[#s.order + 1] = e.key
+    end
+
+    local function listFolder(dev, storage, folderPath, keyBase)
+        PC.request{
+            path = devicePath(dev, "/files?path=" .. PC.urlEncode(folderPath) .. "/"),
+            onOk = function(_, json)
+                if PC.State.selectedId ~= dev.id then return end
+                local items = type(json) == "table" and json.items or {}
+                for _, it in ipairs(type(items) == "table" and items or {}) do
+                    local long = it.display_name or it.name
+                    if type(long) == "string" then
+                        local path = trimSlash(it.path or (folderPath .. "/" .. tostring(it.name or long)))
+                        local key  = (keyBase ~= "" and keyBase .. "/" or "") .. stripExt(long)
+                        if it.folder then
+                            listFolder(dev, storage, path, keyBase ~= "" and keyBase .. "/" .. long or long)
+                        elseif PRINT_EXT[ext(it.name or long)] or PRINT_EXT[ext(long)] then
+                            addFile({ key = key, storage = storage, path = path, name = stripExt(long),
+                                      size = it.size, readOnly = it.read_only == true })
+                        end
+                    end
+                end
+                PC.applyFiles()
+            end
+        }
+    end
+
+    function PC.refreshFiles()
+        local dev = PC.selectedDevice()
+        local s = PC.State
+        s.files, s.order = {}, {}
+        PC.applyFiles()
+        if not dev or dev.connected == false then return end
+        local function listAll(names)
+            for _, n in ipairs(names) do listFolder(dev, n, n, "") end
+        end
+        PC.request{
+            path = devicePath(dev, "/storages"),
+            onOk = function(_, json)
+                if PC.State.selectedId ~= dev.id then return end
+                local items = type(json) == "table" and (json.items or json.storages or (json[1] and json)) or {}
+                local names = {}
+                for _, st in ipairs(items) do
+                    local n = type(st) == "table" and trimSlash(st.path or st.name) or nil
+                    if n and n ~= "" and st.available ~= false then names[#names + 1] = n end
+                end
+                listAll(#names > 0 and names or { "usb" })
+            end,
+            onError = function() if PC.State.selectedId == dev.id then listAll({ "usb" }) end end
+        }
+    end
+
+    function PC.selectedEntry()
+        local key = PC.State.selected
+        return key and PC.State.files[key] or nil
+    end
+
+
+    -----------------------------------------------------------------------
+    -- Pictures and the file preview panel
+    -----------------------------------------------------------------------
+
+    function PC.setIcon(ctlName, b64)
+        Controls[ctlName].Legend = rapidjson.encode({ DrawChrome = false, IconData = b64 or "" })
+    end
+
+    function PC.fetchThumbnail(dev, path, cb)
+        local cacheKey = tostring(dev.id) .. "|" .. path
+        local cached = PC.State.pictures[cacheKey]
+        if cached then cb(cached); return end
+        PC.request{
+            path    = devicePath(dev, "/files/thumbnail?path=" .. PC.urlEncode(path)),
+            raw     = true,
+            onOk    = function(_, _, body)
+                if not body or body == "" then cb(nil); return end
+                local b64 = Crypto.Base64Encode(body)
+                PC.State.pictures[cacheKey] = b64
+                cb(b64)
+            end,
+            onError = function() cb(nil) end
+        }
+    end
+
+    local PREVIEW_CONTROLS = { "Preview", "Preview Image", "Preview Details" }
+
+    function PC.fileDetails(entry)
+        local lines = { entry.name or entry.key }
+        local size = PC.formatSize(entry.size)
+        if size then lines[#lines + 1] = size end
+        if entry.readOnly then lines[#lines + 1] = "read-only" end
+        return table.concat(lines, "\n")
+    end
+
+    function PC.closePreview()
+        for _, n in ipairs(PREVIEW_CONTROLS) do Controls[n].IsInvisible = true end
+    end
+
+    function PC.openPreview(key)
+        local entry = PC.State.files[key]
+        local dev   = PC.selectedDevice()
+        PC.State.selected = entry and key or nil
+        if PC.disarmDelete then PC.disarmDelete() end
+        if not entry or not dev then PC.closePreview(); return end
+        for _, n in ipairs(PREVIEW_CONTROLS) do Controls[n].IsInvisible = false end
+        Controls["Preview Details"].String = PC.fileDetails(entry)
+        PC.setIcon("Preview Image", nil)
+        PC.fetchThumbnail(dev, entry.path, function(b64)
+            if PC.State.selected == key then PC.setIcon("Preview Image", b64) end
+        end)
+    end
+
+    Controls["Files"].EventHandler   = function(ctl) PC.openPreview(ctl.String) end
+    Controls["Preview"].EventHandler = function() PC.closePreview() end
+    PC.closePreview()
+
+
+    -----------------------------------------------------------------------
+    -- Job buttons
+    -----------------------------------------------------------------------
+
+    Controls["Print"].EventHandler = function()
+        local dev, entry = PC.selectedDevice(), PC.selectedEntry()
+        if not dev then PC.notice("Select a printer first"); return end
+        if not entry then PC.notice("Select a file first"); return end
+        PC.request{
+            method = "POST",
+            path   = devicePath(dev, "/print"),
+            body   = rapidjson.encode({ path = entry.path }),
+            onOk   = function(_, json)
+                local cmd = type(json) == "table" and json.command or nil
+                if type(cmd) == "table" and cmd.ok == false then PC.notice("Print refused by printer")
+                else PC.notice("Printing: " .. entry.name) end
+                Timer.CallAfter(PC.pollFarm, 0.5)
+            end,
+            onError = function(code) PC.notice("Print failed (" .. tostring(code) .. ")") end
+        }
+    end
+
+    Controls["Pause"].EventHandler = function()
+        local st = selectedState()
+        if st == "PRINTING" then PC.command("pause_print", nil, "Pause")
+        elseif st == "PAUSED" then PC.command("resume_print", nil, "Resume")
+        else PC.notice("Nothing to pause") end
+    end
+
+    Controls["Stop"].EventHandler = function()
+        if PC.command("stop_print", nil, "Stop") then Timer.CallAfter(PC.refreshFiles, 2) end
+    end
+
+
+    -----------------------------------------------------------------------
+    -- Delete: first press arms ("Confirm?"), second press within 5 s deletes
+    -----------------------------------------------------------------------
+
+    local DELETE_CONFIRM_SECONDS = 5
+    local DELETE_ARMED_COLOR     = "#B3261E"
+    local deleteIdleColor        = Controls["Delete"].Color
+    local deleteToken            = 0
+
+    function PC.disarmDelete()
+        PC.State.deleteArmed      = false
+        deleteToken               = deleteToken + 1
+        Controls["Delete"].Legend = "Delete"
+        Controls["Delete"].Color  = deleteIdleColor
+    end
+
+    local function deletable()
+        local entry = PC.selectedEntry()
+        if not entry then PC.notice("Select a file first"); return nil end
+        if entry.readOnly then PC.notice("File is read-only"); return nil end
+        local st = selectedState()
+        if st == "PRINTING" or st == "PAUSED" then PC.notice("Busy: " .. st:lower()); return nil end
+        return entry
+    end
+
+    Controls["Delete"].EventHandler = function()
+        local dev, entry = PC.selectedDevice(), deletable()
+        if not dev or not entry then PC.disarmDelete(); return end
+        if not PC.State.deleteArmed then
+            PC.State.deleteArmed      = true
+            deleteToken               = deleteToken + 1
+            local tok                 = deleteToken
+            Controls["Delete"].Legend = "Confirm?"
+            Controls["Delete"].Color  = DELETE_ARMED_COLOR
+            Timer.CallAfter(function() if tok == deleteToken then PC.disarmDelete() end end, DELETE_CONFIRM_SECONDS)
+            return
+        end
+        PC.disarmDelete()
+        PC.request{
+            method  = "DELETE",
+            path    = devicePath(dev, "/files?path=" .. PC.urlEncode(entry.path)),
+            onOk    = function()
+                local s = PC.State
+                s.files[entry.key] = nil
+                for i, k in ipairs(s.order) do if k == entry.key then table.remove(s.order, i); break end end
+                PC.applyFiles()
+                PC.notice("Deleted: " .. entry.name)
+            end,
+            onError = function(code) PC.notice("Delete failed (" .. tostring(code) .. ")") end
+        }
+    end
+
+    chain("onSelectionChanged", function()
+        PC.closePreview()
+        PC.State.selected = nil
+        PC.disarmDelete()
+        PC.refreshFiles()
+    end)
 
 
     -----------------------------------------------------------------------

@@ -92,6 +92,7 @@ end
 
 function test_connect_selection_follows_printer_when_order_changes()
   loadFarm(); M.press("Printer 3")   -- MK4 Left
+  M.settle()                          -- selecting also loads that printer's files
   PC.pollFarm()
   local d = rapidjson.decode(M.fixture("connect_devices.json"))
   table.insert(d.items, { id = "dev-new", name = "Alpha", connected = true, state = { ["/state"] = "IDLE" } })
@@ -103,6 +104,7 @@ end
 
 function test_connect_selected_printer_removed()
   loadFarm(); M.press("Printer 2")
+  M.settle()
   PC.pollFarm()
   M.respondTo("/api/v1/devices", 200, '{"items":[{"id":"dev-mk4","name":"MK4 Left","connected":true,"state":{}}]}')
   assert(PC.State.selectedId == nil and M.ctl("Selected Printer").String == "No printer selected")

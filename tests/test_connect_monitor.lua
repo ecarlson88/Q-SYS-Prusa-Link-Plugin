@@ -31,7 +31,7 @@ function test_connect_monitor_offline_printer()
 end
 
 function test_connect_monitor_updates_on_next_poll()
-  farm(); M.press("Printer 2")
+  farm(); M.press("Printer 2"); M.settle()
   local d = rapidjson.decode(M.fixture("connect_devices.json"))
   d.items[2].state["/tools/0/nozzle_temp"] = 215.0
   d.items[2].job.progress = 43
