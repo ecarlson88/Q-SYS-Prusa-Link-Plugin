@@ -121,3 +121,31 @@ function test_debug_skips_routine_polls_but_logs_other_requests()
   for _, line in ipairs(M.logs) do if line:find("/api/v1/storage", 1, true) then found = true end end
   assert(found, "other requests are still logged")
 end
+
+-- Hardware feedback: Material stayed blank. The MINI's job info has no file
+-- details, so the job's file is looked up once per job.
+local function jobWithoutMeta(id)
+  local j = rapidjson.decode(M.fixture("job_printing.json"))
+  j.file.meta = nil
+  j.id = id or j.id
+  return j
+end
+
+function test_material_fetched_from_job_file_once_per_job()
+  M.load({}); M.ctl("Printer IP").String = "10.0.0.5"; M.advance(1.5); M.settle()
+  PL.parseJob(200, jobWithoutMeta())
+  M.respondTo("/api/v1/files/usb/BRACKE~1.BGC", 200, '{"meta":{"filament_type":"PETG"}}')
+  assert(M.ctl("Material").String == "PETG", M.ctl("Material").String)
+  local n = M.count("/api/v1/files/usb/BRACKE~1.BGC")
+  PL.parseJob(200, jobWithoutMeta())
+  assert(M.count("/api/v1/files/usb/BRACKE~1.BGC") == n, "same job: no new lookup")
+  PL.parseJob(200, jobWithoutMeta(298))
+  assert(M.count("/api/v1/files/usb/BRACKE~1.BGC") == n + 1, "new job: look up again")
+end
+
+function test_material_cleared_when_no_job()
+  M.load({})
+  M.ctl("Material").String = "PLA"
+  PL.parseJob(204, nil)
+  assert(M.ctl("Material").String == "")
+end

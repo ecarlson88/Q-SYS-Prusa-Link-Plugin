@@ -1024,7 +1024,8 @@ if Controls then
         if code == 204 or type(resp) ~= "table" then
             Controls.Job.String      = "No Current Job"
             Controls.Progress.String = ""
-            s.jobId, s.progress, s.jobRefs = nil, nil, nil
+            Controls.Material.String = ""
+            s.jobId, s.progress, s.jobRefs, s.materialJob = nil, nil, nil, nil
         else
             s.jobId    = resp.id
             s.progress = tonumber(resp.progress)
@@ -1034,6 +1035,20 @@ if Controls then
                 s.jobRefs = f.refs
                 if type(f.meta) == "table" and f.meta.filament_type then
                     Controls.Material.String = f.meta.filament_type
+                elseif s.materialJob ~= s.jobId and type(f.name) == "string" then
+                    -- The MINI's job info carries no file details: look the file up once per job.
+                    s.materialJob = s.jobId
+                    local jobId = s.jobId
+                    PL.request{
+                        path = "/api/v1/files" .. PL.encodePath((f.path or "") .. "/" .. f.name),
+                        onOk = function(_, json)
+                            local meta = type(json) == "table" and json.meta
+                            if PL.State.jobId == jobId and type(meta) == "table"
+                               and type(meta.filament_type) == "string" then
+                                Controls.Material.String = meta.filament_type
+                            end
+                        end   -- on failure, don't retry every poll; try again on the next job
+                    }
                 end
             else
                 Controls.Job.String = "Serial Print"
