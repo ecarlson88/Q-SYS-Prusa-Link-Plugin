@@ -1246,11 +1246,130 @@ if Controls then
     Controls["API Token"].EventHandler      = function() PC.reset() end
 
 
+    -- Lets each page add its own reaction to "a different printer was selected"
+    -- (onSelectionChanged) and "fresh data for the selected printer" (onSelectedUpdate).
+    local function chain(name, fn)
+        local prev = PC[name]
+        PC[name] = function(dev) if prev then prev(dev) end; fn(dev) end
+    end
+
+
+    -----------------------------------------------------------------------
+    -- Monitor page (selected printer)
+    -----------------------------------------------------------------------
+
+    function PC.showMonitor(dev)
+        if not dev then
+            Controls.Status.String, Controls.Job.String, Controls.Progress.String = "No printer selected", "", ""
+            for _, n in ipairs({ "Nozzle Temp", "Nozzle Target", "Bed Temp", "Bed Target", "Z Height", "Print Speed" }) do
+                Controls[n].Value = 0
+            end
+            return
+        end
+        local function num(key) return tonumber(PC.stateValue(dev, key)) end
+        Controls.Status.String = dev.connected == false and "OFFLINE" or PC.deviceState(dev)
+        local v
+        v = num("/tools/0/nozzle_temp");        if v then Controls["Nozzle Temp"].Value   = v end
+        v = num("/tools/0/nozzle_target_temp"); if v then Controls["Nozzle Target"].Value = v end
+        v = num("/temperature/bed");            if v then Controls["Bed Temp"].Value      = v end
+        v = num("/temperature/bed_target");     if v then Controls["Bed Target"].Value    = v end
+        v = num("/axis/z");                     if v then Controls["Z Height"].Value      = v end
+        v = num("/speed");                      if v then Controls["Print Speed"].Value   = v end
+        local job = type(dev.job) == "table" and dev.job or nil
+        if job then
+            Controls.Job.String = job.display_name or (job.path and job.path:match("([^/]+)$")) or "Print job"
+            local p = PC.deviceProgress(dev)
+            Controls.Progress.String = p and string.format("%.0f%%", p) or ""
+        else
+            Controls.Job.String, Controls.Progress.String = "No Current Job", ""
+        end
+    end
+
+    -- Graph axis labels (controls so a future progress view can hide them).
+    for name, text in pairs({ ["Axis 300C"] = "300°C", ["Axis 225C"] = "225°C", ["Axis 150C"] = "150°C",
+                              ["Axis 75C"] = "75°C", ["Axis 0C"] = "0°C" }) do
+        Controls[name].String = text
+    end
+    -- The progress picture is not built yet (waits on the PrusaLink picture spike).
+    Controls["Progress Image"].IsInvisible   = true
+    Controls["Progress Overlay"].IsInvisible = true
+
+
+    -----------------------------------------------------------------------
+    -- EzSVG temperature graphs (selected printer, last 100 samples)
+    -----------------------------------------------------------------------
+
+    local MAX_SAMPLES = 100
+
+    local function blankSamples()
+        local t = {}
+        for i = 1, MAX_SAMPLES do t[i] = 0.5 end
+        return t
+    end
+    PC.nozzleSamples, PC.bedSamples = blankSamples(), blankSamples()
+
+    local function pushValue(arr, v)
+        table.insert(arr, v)
+        if #arr > MAX_SAMPLES then table.remove(arr, 1) end
+    end
+
+    local function ndraw(values)
+        local doc = EzSVG.Document(800, 600)
+        EzSVG.setStyle({ stroke_width = 1, stroke = "White" })
+        doc:add(EzSVG.Line(0,   0,   0,   599))
+        doc:add(EzSVG.Line(0,   599, 800, 599))
+        doc:add(EzSVG.Line(800, 1,   0,   1))
+        doc:add(EzSVG.Line(800, 150, 0,   150))
+        doc:add(EzSVG.Line(800, 300, 0,   300))
+        doc:add(EzSVG.Line(800, 450, 0,   450))
+        local npath = EzSVG.Path({ stroke="red", stroke_width=3, fill="red", fill_opacity="0" })
+        local step = 800 / math.max(#values - 1, 1)
+        npath:moveToA(0, 800)
+        for k, v in ipairs(values) do npath:lineToA((k-1)*step, (1-v)*600) end
+        npath:lineToA(820, 0)
+        doc:add(npath)
+        return doc:toString("Design\\Nozzle-Temp.svg")
+    end
+
+    local function bdraw(values)
+        local doc = EzSVG.Document(800, 600)
+        local bpath = EzSVG.Path({ stroke="blue", stroke_width=3, fill="blue", fill_opacity="0" })
+        local step = 800 / math.max(#values - 1, 1)
+        bpath:moveToA(0, 800)
+        for k, v in ipairs(values) do bpath:lineToA((k-1)*step, (1-v)*600) end
+        bpath:lineToA(820, 0)
+        doc:add(bpath)
+        return doc:toString("Design\\Bed-Temp.svg")
+    end
+
+    local function drawGraphs()
+        Controls.nGraph.Legend = rapidjson.encode({ DrawChrome=false, IconData=Crypto.Base64Encode(ndraw(PC.nozzleSamples)) })
+        Controls.bGraph.Legend = rapidjson.encode({ DrawChrome=false, IconData=Crypto.Base64Encode(bdraw(PC.bedSamples)) })
+    end
+    drawGraphs()
+
+    graphTimer = Timer.New()
+    graphTimer.EventHandler = function()
+        pushValue(PC.nozzleSamples, Controls["Nozzle Temp"].Position)
+        pushValue(PC.bedSamples,    Controls["Bed Temp"].Position)
+        drawGraphs()
+    end
+
+    chain("onSelectionChanged", function(dev)
+        PC.nozzleSamples, PC.bedSamples = blankSamples(), blankSamples()   -- don't mix printers
+        PC.showMonitor(dev)
+        drawGraphs()
+    end)
+    chain("onSelectedUpdate", function(dev) PC.showMonitor(dev) end)
+
+
     -----------------------------------------------------------------------
     -- Start
     -----------------------------------------------------------------------
 
     showSelection()
+    PC.showMonitor(nil)
+    graphTimer:Start(1)
     polling = Timer.New()
     polling.EventHandler = function() PC.pollFarm() end
     polling:Start(Properties["Poll Interval"].Value)
