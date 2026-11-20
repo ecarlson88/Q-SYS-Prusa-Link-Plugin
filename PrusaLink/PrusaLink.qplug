@@ -951,7 +951,7 @@ if Controls then
         -- Watchdog: if a reply never arrives, free the queue anyway.
         Timer.CallAfter(function() if release() then pump() end end, REQUEST_TIMEOUT + 2)
 
-        PL.log(method .. " " .. url)
+        if not opts.quiet then PL.log(method .. " " .. url) end
         HttpClient.Download{
             Url      = url,
             Method   = method,
@@ -987,7 +987,7 @@ if Controls then
         }
     end
 
-    -- opts: { method, path, raw, tracksConnection, onOk(code, json, body), onError(code) }
+    -- opts: { method, path, raw, quiet, tracksConnection, onOk(code, json, body), onError(code) }
     function PL.request(opts)
         if getIP() == "" then return end
         local gen    = PL.State.gen
@@ -1046,9 +1046,11 @@ if Controls then
 
     function PL.poll()
         if getIP() == "" then return end
-        PL.request{ path = "/api/v1/status", tracksConnection = true,
+        -- quiet: these run every few seconds and would flood the Debug log
+        PL.request{ path = "/api/v1/status", tracksConnection = true, quiet = true,
                     onOk = function(_, json) PL.parseStatus(json) end }
-        PL.request{ path = "/api/v1/job",    onOk = function(code, json) PL.parseJob(code, json) end }
+        PL.request{ path = "/api/v1/job", quiet = true,
+                    onOk = function(code, json) PL.parseJob(code, json) end }
     end
 
     -- One-off connect info, logged for troubleshooting.

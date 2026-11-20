@@ -107,3 +107,17 @@ end
 function test_debug_on_logs()
   M.load({ Debug = true }); PL.log("x"); assert(#M.logs == 1)
 end
+
+-- Hardware feedback: Debug was flooded with the routine status/job polls.
+function test_debug_skips_routine_polls_but_logs_other_requests()
+  M.load({ Debug = true })
+  M.ctl("Printer IP").String = "10.0.0.5"
+  PL.poll(); M.settle()
+  for _, line in ipairs(M.logs) do
+    assert(not line:find("/api/v1/status", 1, true) and not line:find("/api/v1/job", 1, true), line)
+  end
+  PL.request{ path = "/api/v1/storage" }
+  local found = false
+  for _, line in ipairs(M.logs) do if line:find("/api/v1/storage", 1, true) then found = true end end
+  assert(found, "other requests are still logged")
+end
