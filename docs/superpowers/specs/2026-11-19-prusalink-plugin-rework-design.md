@@ -139,6 +139,17 @@ The maintainer picked **2A**: the current job's model picture is shown greyed ou
 2. **Two layered controls.** The normal-color picture goes on a button via `IconData`. On top of it sits a second button with a transparent EzSVG overlay: a semi-transparent orange rectangle rising from the bottom. This needs no image embedding; it needs only a transparent SVG over another control.
 3. **Fallback: vertical progress bar.** Show the picture as is, with a vertical orange bar beside it (left or right) that fills from the bottom. The bar can be a Q-SYS meter control or an EzSVG rectangle. Use this only if neither of the above renders. Tell the maintainer before switching. *(No ring gauge: the maintainer ruled it out.)*
 
+**Spike result (2026-11-20, MINI):**
+- `/thumb/l/usb/BONEDR~1.BGC` returned 200, 58 410 bytes, a valid PNG signature. The plain picture renders via `IconData`.
+- **Method 1** (one SVG with the PNG embedded twice) renders: Q-SYS supports SVG `<image>` with data URIs and `clipPath`. The orange-tint filter had no visible effect, so the fill was too subtle.
+- **Method 2** (transparent overlay button) also renders. The overlay is see-through, but covered the whole box rather than just the picture.
+- **The maintainer chose Method 1**, with a more pronounced difference between printed and unprinted:
+  - unprinted part in greyscale at about 35% opacity,
+  - printed part in full colour,
+  - a bright orange line at the fill edge.
+
+  The fill tracks the picture's real drawn height, read from the PNG header, not the whole box.
+
 ### Versioning and identity
 
 - `PluginInfo.Version` becomes `1.0`. `BuildVersion` is `1.0.0.0`.
