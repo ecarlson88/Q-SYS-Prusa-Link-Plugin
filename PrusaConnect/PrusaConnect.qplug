@@ -288,7 +288,7 @@ end
       table.insert(ctrls, { Name = n, ControlType = "Text", Count = 1, UserPin = (n == "Selected Printer" or n == "Farm Status"), PinStyle = "Output" })
     end
     for i = 1, slotCount(props) do
-      table.insert(ctrls, { Name = "Printer " .. i, ControlType = "Button", ButtonType = "Trigger", Count = 1, UserPin = true, PinStyle = "Both" })
+      table.insert(ctrls, { Name = "Printer " .. i, ControlType = "Button", ButtonType = "Toggle", Count = 1, UserPin = true, PinStyle = "Both" })
       table.insert(ctrls, { Name = "Printer " .. i .. " Status", ControlType = "Text", Count = 1, UserPin = true, PinStyle = "Output" })
     end
     -- Control page
@@ -997,5 +997,263 @@ if Controls then
     EzSVG     = require "EzSVG"
 
     PC = {}  -- runtime namespace (tests load this file and drive PC directly)
+
+    local SLOTS = Properties["Printer Slots"] and Properties["Printer Slots"].Value or 6
+
+
+    -----------------------------------------------------------------------
+    -- State and helpers
+    -----------------------------------------------------------------------
+
+    PC.State = {
+        gen         = 0,        -- bumped on reset; replies from an older gen are ignored
+        devices     = {},       -- device records from the server, sorted by name
+        slots       = {},       -- slot index -> device id
+        selectedId  = nil,      -- device id the Monitor/Files/Control pages act on
+        files       = {},       -- list key -> file entry (selected printer)
+        order       = {},
+        selected    = nil,      -- selected file key
+        deleteArmed = false,
+        pictures    = {},       -- "deviceId|path" -> base64 image
+        step        = 1,        -- jog step in mm
+    }
+
+    function PC.log(...)
+        if Properties["Debug"] and Properties["Debug"].Value then print(...) end
+    end
+
+    -- Percent-encodes a string for use in a URL query value.
+    function PC.urlEncode(v)
+        return (tostring(v):gsub("[^%w%-%._~/]", function(c) return string.format("%%%02X", c:byte()) end))
+    end
+
+    local function baseUrl()
+        local addr = Controls["Server Address"].String:gsub("^%s+", ""):gsub("%s+$", "")
+        addr = addr:gsub("^https?://", ""):gsub("/+$", "")
+        if addr == "" then return nil end
+        if not addr:find(":%d+$") then addr = addr .. ":8080" end
+        local https = Properties["Use HTTPS"] and Properties["Use HTTPS"].Value
+        return (https and "https://" or "http://") .. addr
+    end
+
+    local function token() return Controls["API Token"].String:gsub("^%s+", ""):gsub("%s+$", "") end
+
+    local function setFarmStatus(text) Controls["Farm Status"].String = text end
+
+    local function markOffline(text)
+        Controls.Online.IsInvisible = true
+        setFarmStatus(text)
+    end
+
+
+    -----------------------------------------------------------------------
+    -- Request helper: Bearer token, one request at a time
+    -----------------------------------------------------------------------
+
+    local REQUEST_TIMEOUT = 5
+    local queue, inFlight, flightToken = {}, false, 0
+
+    local function pump()
+        if inFlight then return end
+        local item
+        repeat
+            item = table.remove(queue, 1)
+        until not item or item.gen == PC.State.gen
+        if not item then return end
+        local base = baseUrl()
+        if not base or token() == "" then queue = {}; return end
+
+        local opts   = item.opts
+        local method = opts.method or "GET"
+        local url    = base .. opts.path
+        local gen    = item.gen
+        inFlight     = true
+        flightToken  = flightToken + 1
+        local tok    = flightToken
+        local function release()
+            if tok ~= flightToken or not inFlight then return false end
+            inFlight = false
+            return true
+        end
+        Timer.CallAfter(function() if release() then pump() end end, REQUEST_TIMEOUT + 2)
+
+        local headers = { ["Authorization"] = "Bearer " .. token(), ["Accept"] = "application/json" }
+        if opts.body then headers["Content-Type"] = "application/json" end
+        PC.log(method .. " " .. url)
+        HttpClient.Download{
+            Url          = url,
+            Method       = method,
+            Headers      = headers,
+            Data         = opts.body,
+            Timeout      = REQUEST_TIMEOUT,
+            EventHandler = function(tbl, code, data, err)
+                if not release() then return end
+                if gen == PC.State.gen then
+                    if code == 401 then
+                        markOffline("Token rejected")
+                        if opts.onError then opts.onError(401) end
+                    elseif code == 403 then
+                        setFarmStatus("Token needs operate access")
+                        if opts.onError then opts.onError(403) end
+                    elseif not code or code == 0 then
+                        if opts.tracksConnection then markOffline("Server offline") end
+                        if opts.onError then opts.onError(0) end
+                    elseif code >= 200 and code < 300 then
+                        local json
+                        if not opts.raw and data and data ~= "" then
+                            local ok, v = pcall(rapidjson.decode, data)
+                            if ok then json = v end
+                        end
+                        if opts.onOk then opts.onOk(code, json, data) end
+                    else
+                        PC.log("HTTP " .. tostring(code) .. " " .. url .. " " .. tostring(data or err or ""))
+                        if opts.onError then opts.onError(code, data) end
+                    end
+                end
+                pump()
+            end
+        }
+    end
+
+    -- opts: { method, path, body, raw, tracksConnection, onOk(code, json, body), onError(code, body) }
+    function PC.request(opts)
+        if not baseUrl() or token() == "" then return end
+        local gen    = PC.State.gen
+        local method = opts.method or "GET"
+        if method == "GET" then
+            for _, q in ipairs(queue) do
+                if q.gen == gen and (q.opts.method or "GET") == "GET" and q.opts.path == opts.path then return end
+            end
+        end
+        queue[#queue + 1] = { opts = opts, gen = gen }
+        pump()
+    end
+
+
+    -----------------------------------------------------------------------
+    -- Farm: one poll of GET /api/v1/devices refreshes every printer
+    -----------------------------------------------------------------------
+
+    -- Reads a key from a device's flat state map.
+    function PC.stateValue(dev, key)
+        return type(dev) == "table" and type(dev.state) == "table" and dev.state[key] or nil
+    end
+
+    function PC.deviceState(dev)
+        local st = PC.stateValue(dev, "/state") or (type(dev.job) == "table" and dev.job.state) or ""
+        return tostring(st):upper()
+    end
+
+    function PC.deviceProgress(dev)
+        local p = type(dev.job) == "table" and tonumber(dev.job.progress) or nil
+        return p or tonumber(PC.stateValue(dev, "/job/progress"))
+    end
+
+    function PC.statusLine(dev)
+        if dev.connected == false then return "OFFLINE" end
+        local st = PC.deviceState(dev)
+        local p  = PC.deviceProgress(dev)
+        if (st == "PRINTING" or st == "PAUSED") and p then return string.format("%s %.0f%%", st, p) end
+        return st ~= "" and st or "UNKNOWN"
+    end
+
+    function PC.selectedDevice()
+        local id = PC.State.selectedId
+        if not id then return nil end
+        for _, d in ipairs(PC.State.devices) do if d.id == id then return d end end
+        return nil
+    end
+
+    local function showSelection()
+        local dev = PC.selectedDevice()
+        Controls["Selected Printer"].String = dev and (dev.name or dev.id) or "No printer selected"
+        for i = 1, SLOTS do
+            Controls["Printer " .. i].Boolean = (PC.State.slots[i] ~= nil and PC.State.slots[i] == PC.State.selectedId)
+        end
+    end
+
+    function PC.applyDevices(items)
+        local list = {}
+        for _, d in ipairs(type(items) == "table" and items or {}) do
+            if type(d) == "table" and d.id ~= nil and not d.departed then list[#list + 1] = d end
+        end
+        table.sort(list, function(a, b)
+            local an, bn = tostring(a.name or a.id):lower(), tostring(b.name or b.id):lower()
+            if an == bn then return tostring(a.id) < tostring(b.id) end
+            return an < bn
+        end)
+        PC.State.devices, PC.State.slots = list, {}
+        for i = 1, SLOTS do
+            local d = list[i]
+            Controls["Printer " .. i].IsInvisible            = d == nil
+            Controls["Printer " .. i .. " Status"].IsInvisible = d == nil
+            Controls["Printer " .. i].Legend                 = d and tostring(d.name or d.id) or ""
+            Controls["Printer " .. i .. " Status"].String    = d and PC.statusLine(d) or ""
+            PC.State.slots[i] = d and d.id or nil
+        end
+        local n = #list
+        setFarmStatus(n == 1 and "1 printer" or (n .. " printers") ..
+                      (n > SLOTS and " (" .. SLOTS .. " shown)" or ""))
+        local previous = PC.State.selectedId
+        if previous and not PC.selectedDevice() then PC.select(nil) end
+        showSelection()
+        if PC.onSelectedUpdate then PC.onSelectedUpdate(PC.selectedDevice()) end
+    end
+
+    function PC.pollFarm()
+        PC.request{
+            path = "/api/v1/devices?limit=100",
+            tracksConnection = true,
+            onOk = function(_, json)
+                Controls.Online.IsInvisible = false
+                PC.applyDevices(type(json) == "table" and json.items or {})
+            end
+        }
+    end
+
+    -- Selects a printer by device id (nil clears). Pages that depend on the
+    -- printer register PC.onSelectionChanged.
+    function PC.select(id)
+        if id == PC.State.selectedId then showSelection(); return end
+        PC.State.selectedId = id
+        showSelection()
+        if PC.onSelectionChanged then PC.onSelectionChanged(PC.selectedDevice()) end
+    end
+
+    for i = 1, SLOTS do
+        Controls["Printer " .. i].EventHandler = function()
+            local id = PC.State.slots[i]
+            if id then PC.select(id) else showSelection() end
+        end
+    end
+
+    -- Clears everything and reconnects (address or token changed, or startup).
+    function PC.reset()
+        local s = PC.State
+        s.gen = s.gen + 1
+        s.devices, s.slots, s.selectedId = {}, {}, nil
+        s.files, s.order, s.selected, s.deleteArmed, s.pictures = {}, {}, nil, false, {}
+        for i = 1, SLOTS do
+            Controls["Printer " .. i].IsInvisible = true
+            Controls["Printer " .. i .. " Status"].IsInvisible = true
+        end
+        showSelection()
+        if PC.onSelectionChanged then PC.onSelectionChanged(nil) end
+        if baseUrl() and token() ~= "" then PC.pollFarm() end
+    end
+
+    Controls["Server Address"].EventHandler = function() PC.reset() end
+    Controls["API Token"].EventHandler      = function() PC.reset() end
+
+
+    -----------------------------------------------------------------------
+    -- Start
+    -----------------------------------------------------------------------
+
+    showSelection()
+    polling = Timer.New()
+    polling.EventHandler = function() PC.pollFarm() end
+    polling:Start(Properties["Poll Interval"].Value)
+    Timer.CallAfter(function() PC.reset() end, 1)
 
 end
