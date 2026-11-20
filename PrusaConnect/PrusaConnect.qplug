@@ -1682,6 +1682,72 @@ if Controls then
 
 
     -----------------------------------------------------------------------
+    -- Control page: temperatures, jog, home, motors off
+    -----------------------------------------------------------------------
+
+    local XY_FEEDRATE, Z_FEEDRATE = 3000, 600   -- mm/min
+    local PRESETS = { ["Preset PLA"] = { 215, 60 }, ["Preset PETG"] = { 240, 85 }, ["Cooldown"] = { 0, 0 } }
+
+    local function whole(v) return string.format("%d", math.floor((tonumber(v) or 0) + 0.5)) end
+    local function number(v)   -- 1 -> "1", 0.1 -> "0.1", -10 -> "-10"
+        local t = string.format("%.3f", v):gsub("0+$", ""):gsub("%.$", "")
+        return t
+    end
+
+    local function setNozzle(t) return PC.command("set_nozzle_temperature", { nozzle_temperature = whole(t) }, "Nozzle " .. whole(t) .. "°C") end
+    local function setBed(t)    return PC.command("set_bed_temperature",    { bed_temperature    = whole(t) }, "Bed " .. whole(t) .. "°C") end
+
+    Controls["Set Nozzle"].EventHandler = function() setNozzle(Controls["Nozzle Setpoint"].Value) end
+    Controls["Set Bed"].EventHandler    = function() setBed(Controls["Bed Setpoint"].Value) end
+
+    for name, temps in pairs(PRESETS) do
+        Controls[name].EventHandler = function()
+            Controls["Nozzle Setpoint"].Value = temps[1]
+            Controls["Bed Setpoint"].Value    = temps[2]
+            if setNozzle(temps[1]) then setBed(temps[2]) end
+        end
+    end
+
+    -- Motion is refused while a print is running or paused.
+    local function motionAllowed()
+        if not PC.selectedDevice() then PC.notice("Select a printer first"); return false end
+        local st = selectedState()
+        if st == "PRINTING" or st == "PAUSED" then PC.notice("Busy: " .. st:lower()); return false end
+        return true
+    end
+
+    local STEPS = { ["Step 0.1"] = 0.1, ["Step 1"] = 1, ["Step 10"] = 10 }
+    local function showStep()
+        for name, v in pairs(STEPS) do Controls[name].Boolean = (v == PC.State.step) end
+    end
+    for name, v in pairs(STEPS) do
+        Controls[name].EventHandler = function() PC.State.step = v; showStep() end
+    end
+    showStep()
+
+    local JOG = { ["X+"] = { "x", 1 }, ["X-"] = { "x", -1 }, ["Y+"] = { "y", 1 }, ["Y-"] = { "y", -1 },
+                  ["Z+"] = { "z", 1 }, ["Z-"] = { "z", -1 } }
+    for name, j in pairs(JOG) do
+        Controls[name].EventHandler = function()
+            if not motionAllowed() then return end
+            local dist = number(j[2] * PC.State.step)
+            if j[1] == "z" then
+                PC.command("move_z", { distance = dist, feedrate = Z_FEEDRATE }, "Z " .. dist .. " mm")
+            else
+                PC.command("move", { [j[1]] = dist, feedrate = XY_FEEDRATE }, j[1]:upper() .. " " .. dist .. " mm")
+            end
+        end
+    end
+
+    Controls["Home All"].EventHandler = function()
+        if motionAllowed() then PC.command("home", { axis = "XYZ" }, "Home all") end
+    end
+    Controls["Motors Off"].EventHandler = function()
+        if motionAllowed() then PC.command("disable_steppers", nil, "Motors off") end
+    end
+
+
+    -----------------------------------------------------------------------
     -- Start
     -----------------------------------------------------------------------
 
