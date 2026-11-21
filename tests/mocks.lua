@@ -192,6 +192,21 @@ function M.settle()
   end
 end
 
+-- Answers requests ahead in the queue with an empty 204 until one whose Url
+-- contains `pattern` has been sent, then answers that one with code/body.
+function M.answerUntil(pattern, code, body)
+  for _ = 1, 50 do
+    for i, r in ipairs(M.requests) do
+      if not r.answered and r.Url:find(pattern, 1, true) then M.respond(i, code, body); return end
+    end
+    local waiting
+    for i, r in ipairs(M.requests) do if not r.answered then waiting = i; break end end
+    assert(waiting, "no request matching " .. pattern .. " and nothing left to answer")
+    M.respond(waiting, 204, "")
+  end
+  error("gave up waiting for " .. pattern)
+end
+
 -- Answers the most recent request whose Url contains `pattern`.
 function M.respondTo(pattern, code, body) M.respond(M.find(pattern), code, body) end
 

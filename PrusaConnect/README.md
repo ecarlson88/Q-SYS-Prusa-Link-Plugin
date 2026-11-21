@@ -35,7 +35,7 @@ The online dot turns on once the server answers.
 | Poll Interval | 5 s | How often the printer list is refreshed (1–60). |
 | Printer Slots | 6 | How many printer buttons the Farm tab has (1–8). Extra printers aren't shown. |
 | Use HTTPS | off | Turn on if your server uses HTTPS. |
-| Debug | off | Writes each request and result to the Q-SYS log. |
+| Debug | off | Writes requests and results to the Q-SYS log. The routine printer-list poll is left out. |
 
 ## Pages
 
@@ -45,7 +45,11 @@ The online dot turns on once the server answers.
 - **Monitor:** status, job, progress, temperatures and the temperature graph
   for the selected printer. Its name is shown in the orange strip on this page,
   Files and Control.
-- **Files:** the selected printer's files.
+  - **Click the knob** to swap the graph for the job's **progress picture**: the
+    model starts greyed out and fills with colour from the bottom as it prints,
+    with an orange line at the current height. The server may send the thumbnail
+    as PNG or JPEG; both work.
+- **Files:** the selected printer's files. Long names are shortened with "…".
   - Tap a file for a preview (picture and size); tap the preview to close it.
   - **Start Print**, **Pause/Resume** and **Stop** act on that printer.
   - **Delete** needs a second press within 5 seconds, and is blocked while

@@ -18,10 +18,20 @@ This is a Q-SYS plugin for people running **Prusa Connect Local**, Prusa's self-
 
 ## Non-goals (for now)
 
-- The progress picture on Monitor. It waits on the PrusaLink picture spike, and the same method is used here later.
 - Uploading files, cameras, the chamber controls on Core One, and filament load/unload.
 - The live event stream (SSE). The plugin polls instead (see Approaches).
 - Printers on other servers. One plugin instance talks to one server.
+
+## Ported from PrusaLink after the fork (2026-11-21)
+
+- **Progress picture and knob toggle**, as in PrusaLink (method 1). The thumbnail comes from `/files/thumbnail?path=<job path>`, and both PNG and JPEG are handled.
+- **Request queue fixes:** a failing callback can't stall the queue, and a GET already waiting answers every caller.
+- **Quieter Debug:** the farm poll is no longer logged.
+- **Long file names** are shortened in the list (safe for names that aren't valid UTF-8).
+- **Refreshes:** a newer file refresh ignores the older walk's replies.
+- **Type checks** on values from the server (JSON null arrives as a sentinel in Q-SYS).
+- **Changing address or token** clears the panel and shows "Connecting…".
+- **Layout fixes:** Print Speed size, Z Height as a float up to 400 mm, and the preview panel covers the list's edges.
 
 ## API facts this design relies on
 

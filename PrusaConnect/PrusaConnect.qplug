@@ -269,9 +269,9 @@ end
     table.insert(ctrls, {
         Name = "Z Height",
         ControlType = "Knob",
-        ControlUnit = "Integer",
+        ControlUnit = "Float",
         Min = 0,
-        Max = 100
+        Max = 400
     })
     table.insert(ctrls, {
         Name = "Print Speed",
@@ -581,9 +581,9 @@ function GetControlLayout(props)
             Style = "Text",
             TextBoxStyle = "NoBackground",
             TextColor = {255,255,255},
-            Position = {147,394},
-            Size = {40,29},
-            FontSize = 17
+            Position = {144,394},
+            Size = {48,29},
+            FontSize = 14
        }
        layout["Nozzle Temp"] = {
             PrettyName = "Nozzle Actual",
@@ -839,8 +839,8 @@ function GetControlLayout(props)
         Style = "Button",
         ButtonVisualStyle = "Flat",
         StrokeWidth = 1,
-        Position = {31,66},
-        Size = {228,217},
+        Position = {28,63},
+        Size = {234,223},
         ZOrder = 130,
         Color = {27,27,27},
         OffColor = {27,27,27}
@@ -1091,7 +1091,7 @@ if Controls then
 
         local headers = { ["Authorization"] = "Bearer " .. token(), ["Accept"] = "application/json" }
         if opts.body then headers["Content-Type"] = "application/json" end
-        PC.log(method .. " " .. url)
+        if not opts.quiet then PC.log(method .. " " .. url) end
         HttpClient.Download{
             Url          = url,
             Method       = method,
@@ -1101,25 +1101,36 @@ if Controls then
             EventHandler = function(tbl, code, data, err)
                 if not release() then return end
                 if gen == PC.State.gen then
+                    -- Everyone who asked for this request gets the reply. A callback that
+                    -- errors is logged and skipped so it can't stop the queue.
+                    local function each(field, ...)
+                        for _, o in ipairs(item.callers) do
+                            local fn = o[field]
+                            if fn then
+                                local ok, e = pcall(fn, ...)
+                                if not ok then print("PrusaConnect: callback error for " .. url .. ": " .. tostring(e)) end
+                            end
+                        end
+                    end
                     if code == 401 then
                         markOffline("Token rejected")
-                        if opts.onError then opts.onError(401) end
+                        each("onError", 401)
                     elseif code == 403 then
                         setFarmStatus("Token needs operate access")
-                        if opts.onError then opts.onError(403) end
+                        each("onError", 403)
                     elseif not code or code == 0 then
                         if opts.tracksConnection then markOffline("Server offline") end
-                        if opts.onError then opts.onError(0) end
+                        each("onError", 0)
                     elseif code >= 200 and code < 300 then
                         local json
                         if not opts.raw and data and data ~= "" then
                             local ok, v = pcall(rapidjson.decode, data)
                             if ok then json = v end
                         end
-                        if opts.onOk then opts.onOk(code, json, data) end
+                        each("onOk", code, json, data)
                     else
                         PC.log("HTTP " .. tostring(code) .. " " .. url .. " " .. tostring(data or err or ""))
-                        if opts.onError then opts.onError(code, data) end
+                        each("onError", code, data)
                     end
                 end
                 pump()
@@ -1132,12 +1143,16 @@ if Controls then
         if not baseUrl() or token() == "" then return end
         local gen    = PC.State.gen
         local method = opts.method or "GET"
-        if method == "GET" then
+        if method == "GET" then   -- same GET already waiting: share it instead of sending twice
             for _, q in ipairs(queue) do
-                if q.gen == gen and (q.opts.method or "GET") == "GET" and q.opts.path == opts.path then return end
+                if q.gen == gen and (q.opts.method or "GET") == "GET" and q.opts.path == opts.path then
+                    q.callers[#q.callers + 1] = opts
+                    pump()
+                    return
+                end
             end
         end
-        queue[#queue + 1] = { opts = opts, gen = gen }
+        queue[#queue + 1] = { opts = opts, gen = gen, callers = { opts } }
         pump()
     end
 
@@ -1152,7 +1167,10 @@ if Controls then
     end
 
     function PC.deviceState(dev)
-        local st = PC.stateValue(dev, "/state") or (type(dev.job) == "table" and dev.job.state) or ""
+        -- Q-SYS rapidjson turns JSON null into a non-nil sentinel, so check types.
+        local st = PC.stateValue(dev, "/state")
+        if type(st) ~= "string" then st = type(dev.job) == "table" and dev.job.state or "" end
+        if type(st) ~= "string" then st = "" end
         return tostring(st):upper()
     end
 
@@ -1215,6 +1233,7 @@ if Controls then
     function PC.pollFarm()
         PC.request{
             path = "/api/v1/devices?limit=100",
+            quiet = true,   -- runs every few seconds; would flood the Debug log
             tracksConnection = true,
             onOk = function(_, json)
                 Controls.Online.IsInvisible = false
@@ -1251,6 +1270,7 @@ if Controls then
         end
         showSelection()
         if PC.onSelectionChanged then PC.onSelectionChanged(nil) end
+        markOffline(baseUrl() and token() ~= "" and "Connecting…" or "")
         if baseUrl() and token() ~= "" then PC.pollFarm() end
     end
 
@@ -1289,7 +1309,8 @@ if Controls then
         v = num("/speed");                      if v then Controls["Print Speed"].Value   = v end
         local job = type(dev.job) == "table" and dev.job or nil
         if job then
-            Controls.Job.String = job.display_name or (job.path and job.path:match("([^/]+)$")) or "Print job"
+            local function str(v) return type(v) == "string" and v or nil end
+            Controls.Job.String = str(job.display_name) or (str(job.path) and job.path:match("([^/]+)$")) or "Print job"
             local p = PC.deviceProgress(dev)
             Controls.Progress.String = p and string.format("%.0f%%", p) or ""
         else
@@ -1302,9 +1323,6 @@ if Controls then
                               ["Axis 75C"] = "75°C", ["Axis 0C"] = "0°C" }) do
         Controls[name].String = text
     end
-    -- The progress picture is not built yet (waits on the PrusaLink picture spike).
-    Controls["Progress Image"].IsInvisible   = true
-    Controls["Progress Overlay"].IsInvisible = true
 
 
     -----------------------------------------------------------------------
@@ -1455,9 +1473,32 @@ if Controls then
         return string.format("%d B", bytes)
     end
 
+    -- Longest list entry that fits the Files list without sideways scrolling.
+    local LIST_MAX_CHARS = 24
+
+    local function shorten(text, max)
+        local n = utf8.len(text)
+        if not n then   -- not valid UTF-8: cut by bytes
+            if #text <= max then return text end
+            return text:sub(1, max - 1) .. "…"
+        end
+        if n <= max then return text end
+        return text:sub(1, utf8.offset(text, max) - 1) .. "…"
+    end
+
+    -- Long names are shortened; PC.State.display maps each shown entry back to its key.
     function PC.applyFiles()
-        local choices = {}
-        for i, k in ipairs(PC.State.order) do choices[i] = k end
+        local choices, display = {}, {}
+        for i, k in ipairs(PC.State.order) do
+            local shown, n = shorten(k, LIST_MAX_CHARS), 2
+            while display[shown] do
+                local tag = " " .. n
+                shown, n = shorten(k, LIST_MAX_CHARS - #tag) .. tag, n + 1
+            end
+            display[shown] = k
+            choices[i] = shown
+        end
+        PC.State.display = display
         Controls["Files"].Choices = choices
         local sel = PC.State.selected
         if sel and not PC.State.files[sel] then
@@ -1474,11 +1515,13 @@ if Controls then
         s.order[#s.order + 1] = e.key
     end
 
-    local function listFolder(dev, storage, folderPath, keyBase)
+    local filesToken = 0   -- bumped by each refresh; older walks' replies are ignored
+
+    local function listFolder(dev, storage, folderPath, keyBase, token)
         PC.request{
             path = devicePath(dev, "/files?path=" .. PC.urlEncode(folderPath) .. "/"),
             onOk = function(_, json)
-                if PC.State.selectedId ~= dev.id then return end
+                if PC.State.selectedId ~= dev.id or token ~= filesToken then return end
                 local items = type(json) == "table" and json.items or {}
                 for _, it in ipairs(type(items) == "table" and items or {}) do
                     local long = it.display_name or it.name
@@ -1486,7 +1529,7 @@ if Controls then
                         local path = trimSlash(it.path or (folderPath .. "/" .. tostring(it.name or long)))
                         local key  = (keyBase ~= "" and keyBase .. "/" or "") .. stripExt(long)
                         if it.folder then
-                            listFolder(dev, storage, path, keyBase ~= "" and keyBase .. "/" .. long or long)
+                            listFolder(dev, storage, path, keyBase ~= "" and keyBase .. "/" .. long or long, token)
                         elseif PRINT_EXT[ext(it.name or long)] or PRINT_EXT[ext(long)] then
                             addFile({ key = key, storage = storage, path = path, name = stripExt(long),
                                       size = it.size, readOnly = it.read_only == true })
@@ -1501,11 +1544,13 @@ if Controls then
     function PC.refreshFiles()
         local dev = PC.selectedDevice()
         local s = PC.State
+        filesToken = filesToken + 1
+        local token = filesToken
         s.files, s.order = {}, {}
         PC.applyFiles()
         if not dev or dev.connected == false then return end
         local function listAll(names)
-            for _, n in ipairs(names) do listFolder(dev, n, n, "") end
+            for _, n in ipairs(names) do listFolder(dev, n, n, "", token) end
         end
         PC.request{
             path = devicePath(dev, "/storages"),
@@ -1537,18 +1582,30 @@ if Controls then
         Controls[ctlName].Legend = rapidjson.encode({ DrawChrome = false, IconData = b64 or "" })
     end
 
+    -- Image type, and width/height for PNG, from the first bytes of a picture.
+    function PC.imageInfo(body)
+        if body:sub(1, 8) == "\137PNG\r\n\26\n" and #body >= 24 then
+            local function be32(i) local a, b, c, d = body:byte(i, i + 3); return ((a * 256 + b) * 256 + c) * 256 + d end
+            return "image/png", be32(17), be32(21)
+        end
+        if body:sub(1, 2) == "\255\216" then return "image/jpeg" end
+        return "image/png"
+    end
+
+    -- cb(base64 or nil, mime, width, height). The server sends PNG or JPEG.
     function PC.fetchThumbnail(dev, path, cb)
         local cacheKey = tostring(dev.id) .. "|" .. path
         local cached = PC.State.pictures[cacheKey]
-        if cached then cb(cached); return end
+        if cached then cb(cached.b64, cached.mime, cached.w, cached.h); return end
         PC.request{
             path    = devicePath(dev, "/files/thumbnail?path=" .. PC.urlEncode(path)),
             raw     = true,
             onOk    = function(_, _, body)
                 if not body or body == "" then cb(nil); return end
-                local b64 = Crypto.Base64Encode(body)
-                PC.State.pictures[cacheKey] = b64
-                cb(b64)
+                local mime, w, h = PC.imageInfo(body)
+                local pic = { b64 = Crypto.Base64Encode(body), mime = mime, w = w, h = h }
+                PC.State.pictures[cacheKey] = pic
+                cb(pic.b64, pic.mime, pic.w, pic.h)
             end,
             onError = function() cb(nil) end
         }
@@ -1582,7 +1639,9 @@ if Controls then
         end)
     end
 
-    Controls["Files"].EventHandler   = function(ctl) PC.openPreview(ctl.String) end
+    Controls["Files"].EventHandler   = function(ctl)
+        PC.openPreview((PC.State.display or {})[ctl.String] or ctl.String)
+    end
     Controls["Preview"].EventHandler = function() PC.closePreview() end
     PC.closePreview()
 
@@ -1682,6 +1741,101 @@ if Controls then
 
 
     -----------------------------------------------------------------------
+    -- Monitor page: progress picture (greyed model fills with colour) and the
+    -- knob toggle between it and the temperature graph
+    -----------------------------------------------------------------------
+
+    local PROG_W, PROG_H    = 222, 155
+    local UNPRINTED_OPACITY = "0.35"
+    local EDGE_COLOR        = "#ff7a2f"
+    local AXIS_CONTROLS     = { "Axis 300C", "Axis 225C", "Axis 150C", "Axis 75C", "Axis 0C" }
+
+    local function fmt(v) return (string.format("%.1f", v):gsub("%.0$", "")) end
+
+    -- One SVG: the picture greyed and dimmed above the fill line, full colour below.
+    -- iw/ih let the fill follow the picture's drawn height; without them the box is used.
+    function PC.progressSvg(b64, pct, mime, iw, ih)
+        pct  = math.max(0, math.min(100, tonumber(pct) or 0))
+        mime = mime or "image/png"
+        local y0, dh = 0, PROG_H
+        if iw and ih and iw > 0 and ih > 0 then
+            local scale = math.min(PROG_W / iw, PROG_H / ih)
+            dh = ih * scale
+            y0 = (PROG_H - dh) / 2
+        end
+        local edge = y0 + dh * (1 - pct / 100)
+        local uri  = "data:" .. mime .. ";base64," .. b64
+        local img  = string.format('x="0" y="0" width="%d" height="%d" preserveAspectRatio="xMidYMid meet" ' ..
+                                   'href="%s" xlink:href="%s"', PROG_W, PROG_H, uri, uri)
+        local parts = {
+            string.format('<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" ' ..
+                          'width="%d" height="%d" viewBox="0 0 %d %d">', PROG_W, PROG_H, PROG_W, PROG_H),
+            '<defs><filter id="grey"><feColorMatrix type="saturate" values="0"/></filter>',
+            string.format('<clipPath id="todo"><rect x="0" y="0" width="%d" height="%s"/></clipPath>', PROG_W, fmt(edge)),
+            string.format('<clipPath id="done"><rect x="0" y="%s" width="%d" height="%s"/></clipPath>',
+                          fmt(edge), PROG_W, fmt(PROG_H - edge)),
+            '</defs>',
+            '<g clip-path="url(#todo)"><image ' .. img .. ' filter="url(#grey)" opacity="' .. UNPRINTED_OPACITY .. '"/></g>',
+            '<g clip-path="url(#done)"><image ' .. img .. '/></g>',
+        }
+        if pct > 0 and pct < 100 then
+            parts[#parts + 1] = string.format('<line x1="0" y1="%s" x2="%d" y2="%s" stroke="%s" stroke-width="2"/>',
+                                              fmt(edge), PROG_W, fmt(edge), EDGE_COLOR)
+        end
+        parts[#parts + 1] = '</svg>'
+        return table.concat(parts)
+    end
+
+    local lastProgressKey = nil
+
+    function PC.clearProgress()
+        lastProgressKey = nil
+        PC.lastProgressSvg = nil
+        PC.setIcon("Progress Image", nil)
+    end
+
+    -- Redraws the selected printer's progress picture when its job or progress changed.
+    function PC.updateProgress(dev)
+        local job  = dev and type(dev.job) == "table" and dev.job or nil
+        local path = job and (type(job.path) == "string" and job.path or PC.stateValue(dev, "/job/path")) or nil
+        if not dev or not job or type(path) ~= "string" then
+            if lastProgressKey ~= nil then PC.clearProgress() end
+            return
+        end
+        path = trimSlash(path)
+        local pct = PC.deviceProgress(dev) or 0
+        local key = tostring(dev.id) .. "|" .. path .. "|" .. tostring(pct)
+        if key == lastProgressKey then return end
+        lastProgressKey = key
+        local id = dev.id
+        PC.fetchThumbnail(dev, path, function(b64, mime, w, h)
+            if PC.State.selectedId ~= id or lastProgressKey ~= key then return end
+            if not b64 then PC.setIcon("Progress Image", nil); return end
+            PC.lastProgressSvg = PC.progressSvg(b64, pct, mime, w, h)
+            PC.setIcon("Progress Image", Crypto.Base64Encode(PC.lastProgressSvg))
+        end)
+    end
+
+    -- view: "graph" (temperature graph + axis labels) or "progress" (picture).
+    function PC.setView(view)
+        PC.State.view = view
+        local graph = view ~= "progress"
+        Controls.nGraph.IsInvisible = not graph
+        Controls.bGraph.IsInvisible = not graph
+        for _, n in ipairs(AXIS_CONTROLS) do Controls[n].IsInvisible = not graph end
+        Controls["Progress Image"].IsInvisible   = graph
+        Controls["Progress Overlay"].IsInvisible = true
+    end
+
+    Controls["View Toggle"].EventHandler = function()
+        PC.setView(PC.State.view == "progress" and "graph" or "progress")
+    end
+
+    chain("onSelectionChanged", function(dev) PC.clearProgress(); PC.updateProgress(dev) end)
+    chain("onSelectedUpdate",   function(dev) PC.updateProgress(dev) end)
+
+
+    -----------------------------------------------------------------------
     -- Control page: temperatures, jog, home, motors off
     -----------------------------------------------------------------------
 
@@ -1753,6 +1907,7 @@ if Controls then
 
     showSelection()
     PC.showMonitor(nil)
+    PC.setView("graph")   -- Monitor page starts on the temperature graph
     graphTimer:Start(1)
     polling = Timer.New()
     polling.EventHandler = function() PC.pollFarm() end

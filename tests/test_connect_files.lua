@@ -21,9 +21,10 @@ end
 -- Selects MINI Lab (slot 2) and answers its file listing.
 local function miniFiles()
   farm(); M.press("Printer 2")
-  M.respondTo("/api/v1/devices/dev-mini/storages", 200, STORAGES)
-  M.respondTo("/api/v1/devices/dev-mini/files?path=usb/", 200, ROOT)
-  M.respondTo("/api/v1/devices/dev-mini/files?path=usb/MODELS/", 200, MODELS)
+  M.answerUntil("/api/v1/devices/dev-mini/storages", 200, STORAGES)
+  M.answerUntil("/api/v1/devices/dev-mini/files?path=usb/", 200, ROOT)
+  M.answerUntil("/api/v1/devices/dev-mini/files?path=usb/MODELS/", 200, MODELS)
+  M.settle()   -- the progress picture request, if still waiting
 end
 
 local function open(key) M.ctl("Files").String = key; M.press("Files") end
@@ -39,8 +40,8 @@ end
 
 function test_connect_storage_listing_failure_falls_back_to_usb()
   farm(); M.press("Printer 2")
-  M.respondTo("/api/v1/devices/dev-mini/storages", 404, "")
-  assert(M.last().Url:find("/api/v1/devices/dev-mini/files?path=usb/", 1, true), M.last().Url)
+  M.answerUntil("/api/v1/devices/dev-mini/storages", 404, "")
+  M.answerUntil("/api/v1/devices/dev-mini/files?path=usb/", 200, '{"items":[]}')   -- fell back to usb
 end
 
 function test_connect_changing_printer_clears_files()
