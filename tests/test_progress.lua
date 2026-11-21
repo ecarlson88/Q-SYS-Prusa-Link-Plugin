@@ -107,3 +107,18 @@ function test_samples_continue_in_progress_view()
   M.advance(1)
   assert(nvalues[#nvalues] == 0.66)
 end
+
+-- A print already running when the plugin connects: the first job poll draws
+-- the progress picture without waiting for the progress to change.
+function test_progress_picture_drawn_for_print_already_running_at_connect()
+  M.load({})
+  M.ctl("Printer IP").String = "10.0.0.5"
+  M.advance(1.5)                                    -- startup reset: status, job, version, info, files
+  M.answerUntil("/api/v1/job", 200, M.fixture("job_printing.json"))
+  M.answerUntil("/thumb/l/usb/BRACKE~1.BGC", 200, png(220, 124))
+  M.settle()
+  assert(M.ctl("Progress").String == "42%")
+  assert(PL.lastProgressSvg and PL.lastProgressSvg:find('y1="87.5"', 1, true), "drawn at 42%")
+  M.press("View Toggle")
+  assert(M.ctl("Progress Image").IsInvisible == false and M.legendIcon("Progress Image") ~= "")
+end

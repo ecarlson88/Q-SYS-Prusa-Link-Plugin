@@ -170,3 +170,15 @@ function test_cport_same_progress_no_redraw_and_cleared_on_printer_change()
   M.press("Printer 3"); M.settle()   -- MK4 Left, no job
   assert(M.legendIcon("Progress Image") == "")
 end
+
+-- A printer already printing when the plugin connects: selecting it draws the picture.
+function test_cport_progress_picture_for_print_running_at_connect()
+  M.loadConnect({})
+  M.ctl("Server Address").String = "10.0.0.9"; M.ctl("API Token").String = "pcl_abc_secret"
+  M.advance(1.5)                                    -- startup reset polls the farm
+  M.answerUntil("/api/v1/devices", 200, M.fixture("connect_devices.json"))
+  assert(PC.lastProgressSvg == nil, "nothing selected yet")
+  M.press("Printer 2")                              -- MINI Lab, printing 42%
+  M.answerUntil("/files/thumbnail?path=usb/BRACKE~1.BGC", 200, PNG_HDR(220, 124))
+  assert(PC.lastProgressSvg and PC.lastProgressSvg:find('y1="87.5"', 1, true))
+end
