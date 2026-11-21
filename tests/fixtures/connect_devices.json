@@ -1,0 +1,17 @@
+{"items":[
+ {"id":"dev-mk4","name":"MK4 Left","model":"MK4S","connected":true,
+  "state":{"/state":"IDLE","/tools/0/nozzle_temp":24.1,"/tools/0/nozzle_target_temp":0,"/temperature/bed":23.0,"/temperature/bed_target":0,"/axis/z":10.0,"/speed":100},
+  "job":null,"capabilities":["core.command.pause_print","core.command.home"],"verbs":["core.command.pause_print","core.command.home"]},
+ {"id":"dev-mini","name":"MINI Lab","model":"MINI","connected":true,
+  "state":{"/state":"PRINTING","/tools/0/nozzle_temp":214.6,"/tools/0/nozzle_target_temp":215,"/temperature/bed":59.8,"/temperature/bed_target":60,
+           "/axis/z":8.4,"/speed":100,"/job/progress":42,"/job/time_remaining":3480,"/job/path":"/usb/BRACKE~1.BGC"},
+  "job":{"id":12,"display_name":"bracket_v3_PLA.bgcode","path":"/usb/BRACKE~1.BGC","state":"PRINTING","progress":42,"running":true},
+  "capabilities":["core.command.pause_print","core.command.resume_print","core.command.stop_print",
+                  "core.command.set_nozzle_temperature","core.command.set_nozzle_temperature#nozzle_temperature",
+                  "core.command.set_bed_temperature","core.command.set_bed_temperature#bed_temperature",
+                  "core.command.move","core.command.move_z","core.command.home","core.command.disable_steppers"],
+  "verbs":["core.command.pause_print","core.command.resume_print","core.command.stop_print",
+           "core.command.set_nozzle_temperature","core.command.set_bed_temperature",
+           "core.command.move","core.command.move_z","core.command.home","core.command.disable_steppers"]},
+ {"id":"dev-core","name":"Core One","model":"COREONE","connected":false,"state":{"/state":"IDLE"},"job":null,"capabilities":[],"verbs":[]}
+],"total":3,"limit":100,"offset":0}
