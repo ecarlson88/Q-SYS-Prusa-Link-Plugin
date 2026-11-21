@@ -962,24 +962,35 @@ if Controls then
             EventHandler = function(tbl, code, data, err)
                 if not release() then return end   -- watchdog already gave up on it
                 if gen == PL.State.gen then        -- else stale: printer or login changed
+                    -- Everyone who asked for this request gets the reply. A callback that
+                    -- errors is logged and skipped so it can't stop the queue.
+                    local function each(field, ...)
+                        for _, o in ipairs(item.callers) do
+                            local fn = o[field]
+                            if fn then
+                                local ok, e = pcall(fn, ...)
+                                if not ok then print("PrusaLink: callback error for " .. url .. ": " .. tostring(e)) end
+                            end
+                        end
+                    end
                     if code == 401 then
                         markOffline("Auth failed")
-                        if opts.onError then opts.onError(401) end
+                        each("onError", 401)
                     elseif not code or code == 0 then
                         -- Only the status poll decides online/offline; a slow
                         -- picture or file request failing doesn't mean the printer is gone.
                         if opts.tracksConnection then markOffline("Offline") end
-                        if opts.onError then opts.onError(0) end
+                        each("onError", 0)
                     elseif code >= 200 and code < 300 then
                         local json
                         if not opts.raw and data and data ~= "" then
                             local ok, v = pcall(rapidjson.decode, data)
                             if ok then json = v end
                         end
-                        if opts.onOk then opts.onOk(code, json, data) end
+                        each("onOk", code, json, data)
                     else
                         PL.log("HTTP " .. tostring(code) .. " " .. url .. " " .. tostring(err or ""))
-                        if opts.onError then opts.onError(code) end
+                        each("onError", code)
                     end
                 end
                 pump()
@@ -992,12 +1003,16 @@ if Controls then
         if getIP() == "" then return end
         local gen    = PL.State.gen
         local method = opts.method or "GET"
-        if method == "GET" then   -- same GET already waiting: don't queue it twice
+        if method == "GET" then   -- same GET already waiting: share it instead of sending twice
             for _, q in ipairs(queue) do
-                if q.gen == gen and (q.opts.method or "GET") == "GET" and q.opts.path == opts.path then return end
+                if q.gen == gen and (q.opts.method or "GET") == "GET" and q.opts.path == opts.path then
+                    q.callers[#q.callers + 1] = opts
+                    pump()
+                    return
+                end
             end
         end
-        queue[#queue + 1] = { opts = opts, gen = gen }
+        queue[#queue + 1] = { opts = opts, gen = gen, callers = { opts } }
         pump()
     end
 
@@ -1010,13 +1025,15 @@ if Controls then
         local p = resp and resp.printer
         if type(p) ~= "table" then return end
         Controls.Online.IsInvisible = false
-        if p.state         then PL.State.state = p.state; Controls.Status.String = p.state end
-        if p.temp_nozzle   then Controls["Nozzle Temp"].Value   = p.temp_nozzle   end
-        if p.target_nozzle then Controls["Nozzle Target"].Value = p.target_nozzle end
-        if p.temp_bed      then Controls["Bed Temp"].Value      = p.temp_bed      end
-        if p.target_bed    then Controls["Bed Target"].Value    = p.target_bed    end
-        if p.speed         then Controls["Print Speed"].Value   = p.speed         end
-        if p.axis_z        then Controls["Z Height"].Value      = p.axis_z        end
+        -- Q-SYS rapidjson turns JSON null into a non-nil sentinel, so check types.
+        local function num(v) return type(v) == "number" and v or nil end
+        if type(p.state) == "string" then PL.State.state = p.state; Controls.Status.String = p.state end
+        if num(p.temp_nozzle)   then Controls["Nozzle Temp"].Value   = p.temp_nozzle   end
+        if num(p.target_nozzle) then Controls["Nozzle Target"].Value = p.target_nozzle end
+        if num(p.temp_bed)      then Controls["Bed Temp"].Value      = p.temp_bed      end
+        if num(p.target_bed)    then Controls["Bed Target"].Value    = p.target_bed    end
+        if num(p.speed)         then Controls["Print Speed"].Value   = p.speed         end
+        if num(p.axis_z)        then Controls["Z Height"].Value      = p.axis_z        end
     end
 
     function PL.parseJob(code, resp)
@@ -1027,12 +1044,13 @@ if Controls then
             Controls.Material.String = ""
             s.jobId, s.progress, s.jobRefs, s.materialJob = nil, nil, nil, nil
         else
+            local function str(v) return type(v) == "string" and v or nil end
             s.jobId    = resp.id
-            s.progress = tonumber(resp.progress)
+            s.progress = type(resp.progress) == "number" and resp.progress or nil
             local f    = resp.file
             if type(f) == "table" then
-                Controls.Job.String = f.display_name or f.name or "Unknown"
-                s.jobRefs = f.refs
+                Controls.Job.String = str(f.display_name) or str(f.name) or "Unknown"
+                s.jobRefs = type(f.refs) == "table" and f.refs or nil
                 if type(f.meta) == "table" and f.meta.filament_type then
                     Controls.Material.String = f.meta.filament_type
                 elseif s.materialJob ~= s.jobId and type(f.name) == "string" then
@@ -1080,7 +1098,13 @@ if Controls then
         s.gen = s.gen + 1
         s.jobId, s.state, s.progress, s.jobRefs = nil, "", nil, nil
         s.files, s.order, s.readOnly, s.selected, s.deleteArmed, s.pictures = {}, {}, {}, nil, false, {}
+        s.materialJob = nil
         Controls["Files"].Choices = {}
+        -- Clear what the panel shows, so the old printer's job never lingers.
+        Controls.Job.String, Controls.Progress.String, Controls.Material.String = "No Current Job", "", ""
+        markOffline(getIP() ~= "" and "Connecting…" or "")
+        if PL.closePreview then PL.closePreview() end
+        if PL.clearProgress then PL.clearProgress() end
         if getIP() == "" then return end
         PL.poll()
         PL.connectInfo()
@@ -1134,7 +1158,12 @@ if Controls then
     local LIST_MAX_CHARS = 24
 
     local function shorten(text, max)
-        if utf8.len(text) <= max then return text end
+        local n = utf8.len(text)
+        if not n then   -- not valid UTF-8 (odd name on the stick): cut by bytes
+            if #text <= max then return text end
+            return text:sub(1, max - 1) .. "…"
+        end
+        if n <= max then return text end
         return text:sub(1, utf8.offset(text, max) - 1) .. "…"   -- max-1 chars + "…"
     end
 
@@ -1173,14 +1202,17 @@ if Controls then
         PL.applyFiles()
     end
 
-    local function listFolder(storage, base, apiBase)
+    local filesToken = 0   -- bumped by each refresh; older walks' replies are ignored
+
+    local function listFolder(storage, base, apiBase, token)
         PL.request{
             path = "/api/v1/files/" .. PL.encodePath(storage .. apiBase) .. "/",
             onOk = function(_, json)
+                if token ~= filesToken then return end
                 local out, missing = {}, {}
                 PL.walkFolder(json, storage, base, out, missing, apiBase)
                 addFiles(out)
-                for _, f in ipairs(missing) do listFolder(storage, f.path, f.apiPath) end
+                for _, f in ipairs(missing) do listFolder(storage, f.path, f.apiPath, token) end
             end
         }
     end
@@ -1191,13 +1223,14 @@ if Controls then
             onOk = function(_, json)
                 if type(json) ~= "table" or type(json.storage_list) ~= "table" then return end
                 local s = PL.State
+                filesToken = filesToken + 1
                 s.files, s.order, s.readOnly = {}, {}, {}
                 for _, st in ipairs(json.storage_list) do
                     if st.available then
                         local name = (st.path or ""):match("^/?([^/]+)") or st.name
                         if name then
                             s.readOnly[name] = st.read_only and true or false
-                            listFolder(name, "", "")
+                            listFolder(name, "", "", filesToken)
                         end
                     end
                 end
@@ -1429,6 +1462,11 @@ if Controls then
     end
 
     local lastProgressKey = nil
+
+    function PL.clearProgress()
+        lastProgressKey = nil
+        PL.setIcon("Progress Image", nil)
+    end
 
     -- Called by parseJob after every job poll; redraws only when something changed.
     function PL.onProgress()
